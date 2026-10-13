@@ -53,6 +53,14 @@ jobs:
       - name: Тесты
         run: cargo test --workspace --release
 
+      # что нового — раздел этой версии из CHANGELOG.md; его же покажет окно обновления
+      - name: Что нового
+        shell: bash
+        run: |
+          v=$(grep -m1 '"version"' app/src-tauri/tauri.conf.json | sed 's/.*"\([0-9][0-9.]*\)".*/\1/')
+          notes=$(awk -v h="## $v" '$0==h{f=1;next} /^## /{f=0} f' CHANGELOG.md)
+          { echo "NOTES<<NOTES_END"; echo "$notes"; echo "NOTES_END"; } >> "$GITHUB_ENV"
+
       - name: Сборка и выпуск
         uses: tauri-apps/tauri-action@v0
         env:
@@ -66,6 +74,8 @@ jobs:
           tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           releaseName: 'FileHunter __VERSION__ (beta)'
           releaseBody: |
+            ${{ env.NOTES }}
+
             Beta release. The interface is in Russian for now.
 
             **Windows:** `FileHunter_*_x64-setup.exe` is the installer, `*_portable.exe` runs without installing.
