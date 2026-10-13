@@ -2066,6 +2066,12 @@ fn main() {
         })
         .setup(|app| {
             tray(app)?;
+            // экземпляр со своей папкой данных (тестовая версия рядом с установленной) — видно по заголовку
+            if std::env::var_os("FILECAT_DATA_DIR").is_some() {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.set_title("FileHunter — тестовая версия");
+                }
+            }
             let st = app.state::<Shared>().inner().clone();
             // связь с другими компьютерами — в фоне, окно не ждёт
             {
