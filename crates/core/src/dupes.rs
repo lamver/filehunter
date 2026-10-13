@@ -745,7 +745,10 @@ mod tests {
 
     #[test]
     fn finds_copies_and_rejects_late_difference() {
-        let dir = std::env::temp_dir().join(format!("filecat-dupes-{}", std::process::id()));
+        // на macOS временная папка лежит в /var — системной, а системные файлы дубликатами не считаются
+        let base = std::env::temp_dir();
+        let base = if crate::safety::is_protected(&base.join("x")) { std::env::current_dir().unwrap() } else { base };
+        let dir = base.join(format!("filecat-dupes-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // 5 МБ: одинаковые начало/конец, различие в середине у третьего файла
