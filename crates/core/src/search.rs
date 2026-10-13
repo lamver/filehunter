@@ -104,6 +104,18 @@ impl Query {
         Ok(out)
     }
 
+    /// Подходит ли запись `i` сегмента под запрос: имя, фильтры и path:.
+    pub fn matches_at(&self, s: &crate::index::Segment, i: u32) -> bool {
+        if !self.matches_entry(s.lower(i), &s.entries[i as usize]) {
+            return false;
+        }
+        if self.path_terms.is_empty() {
+            return true;
+        }
+        let p = s.path(i).to_string_lossy().to_lowercase();
+        self.path_terms.iter().all(|t| p.contains(t.as_str()))
+    }
+
     fn matches_entry(&self, lower: &str, e: &crate::Entry) -> bool {
         if e.is_deleted() {
             return false;

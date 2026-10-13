@@ -309,6 +309,18 @@ pub fn scan_s3(
     cancel: &AtomicBool,
     progress: &(dyn Fn(&ScanProgress) + Sync),
 ) -> Result<Segment> {
+    scan_s3_etags(cfg, secret, cancel, progress).map(|(seg, _)| seg)
+}
+
+/// Как `scan_s3`, плюс ETag каждого объекта (номер записи → ETag). ETag приходит в том же
+/// списке объектов бесплатно, а у обычных файлов это MD5 содержимого — по нему ищутся
+/// копии без скачивания.
+pub fn scan_s3_etags(
+    cfg: &S3Config,
+    secret: &str,
+    cancel: &AtomicBool,
+    progress: &(dyn Fn(&ScanProgress) + Sync),
+) -> Result<(Segment, Vec<(u32, String)>)> {
     use futures::TryStreamExt;
     let started = Instant::now();
     let op = cfg.operator(secret)?;
@@ -325,7 +337,7 @@ pub fn scan_s3(
             }
             let md = entry.metadata();
             let mtime = md.last_modified().map(|t| t.into_inner().as_second()).unwrap_or(0);
-            tree.add(entry.path(), md.content_length(), mtime);
+            tree.add(entry.path(), md.content_length(), mtime, md.etag());
             if ticker.ready() {
                 progress(&ScanProgress {
                     root: root.clone(),
@@ -339,7 +351,7 @@ pub fn scan_s3(
         }
         Ok(())
     })?;
-    let Tree { b, dirs, files, bytes } = tree;
+    let Tree { b, dirs, files, bytes, etags } = tree;
 
     let info = SourceInfo {
         root: root.clone(),
@@ -352,7 +364,7 @@ pub fn scan_s3(
         errors: 0,
     };
     progress(&ScanProgress { root, files, dirs: info.dirs, bytes, errors: 0, done: true });
-    Ok(b.finish(info))
+    Ok((b.finish(info), etags))
 }
 
 /// Дерево из плоского списка ключей: «папки» S3 — это общие префиксы ключей.
@@ -362,11 +374,12 @@ struct Tree {
     dirs: HashMap<String, u32>,
     files: u64,
     bytes: u64,
+    etags: Vec<(u32, String)>,
 }
 
 impl Tree {
     /// `key` — путь объекта; оканчивается на '/', если это явная «папка».
-    fn add(&mut self, key: &str, size: u64, mtime: i64) {
+    fn add(&mut self, key: &str, size: u64, mtime: i64, etag: Option<&str>) {
         let key = key.trim_start_matches('/');
         let is_dir = key.ends_with('/');
         let path = key.trim_end_matches('/');
@@ -382,7 +395,10 @@ impl Tree {
             None => ("", path),
         };
         let parent = ensure_dir(&mut self.b, &mut self.dirs, parent_key);
-        self.b.push(parent, name, 0, size, mtime);
+        let i = self.b.push(parent, name, 0, size, mtime);
+        if let Some(t) = etag {
+            self.etags.push((i, t.to_string()));
+        }
         self.files += 1;
         self.bytes += size;
     }
@@ -414,12 +430,12 @@ mod tests {
     #[test]
     fn tree_from_keys() {
         let mut t = Tree::default();
-        t.add("photos/", 0, 0);
-        t.add("photos/2025/a.jpg", 10, 1);
-        t.add("photos/2025/b.jpg", 20, 2);
-        t.add("docs/report.pdf", 5, 3);
-        t.add("root.txt", 1, 4);
-        let Tree { b, dirs, files, bytes } = t;
+        t.add("photos/", 0, 0, None);
+        t.add("photos/2025/a.jpg", 10, 1, None);
+        t.add("photos/2025/b.jpg", 20, 2, None);
+        t.add("docs/report.pdf", 5, 3, None);
+        t.add("root.txt", 1, 4, None);
+        let Tree { b, dirs, files, bytes, .. } = t;
         assert_eq!((files, bytes, dirs.len()), (4, 36, 3));
         let info = SourceInfo {
             root: "s3://backup".into(),

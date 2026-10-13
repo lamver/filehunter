@@ -25,6 +25,7 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 iroh-mdns-address-lookup = "*"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 rand = "0.9"
+blake3 = "1.5"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Credentials"] }

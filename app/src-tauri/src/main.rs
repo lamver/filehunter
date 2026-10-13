@@ -8,18 +8,19 @@ mod p2p;
 mod update;
 mod watch;
 
-use filecat_core::dupes::{find_duplicates_live, DupeGroup, DupeOptions, DupeReport};
+use filecat_core::dupes::{find_duplicates_in, find_duplicates_live, DupeGroup, DupeOptions, DupeReport, ETag};
 use filecat_core::scan::{scan_walk, ScanOptions};
 use filecat_core::search::{search, search_in, Query, SortBy};
-use filecat_core::remote::{local_list_dir, s3_check, s3_list_dir, scan_s3, CheckError, LiveEntry, S3Config};
+use filecat_core::remote::{local_list_dir, s3_check, s3_list_dir, scan_s3_etags, CheckError, LiveEntry, S3Config};
 use filecat_core::safety::is_protected;
 use filecat_core::{FileRef, Index};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 type CmdResult<T> = Result<T, String>;
@@ -65,6 +66,10 @@ struct AppState {
     p2p: std::sync::OnceLock<Arc<p2p::P2p>>,
     /// Почему связь не запустилась (пусто — всё в порядке или ещё запускается).
     p2p_error: Mutex<String>,
+    /// Идущий поиск дубликатов (флаг остановки).
+    dup_run: Mutex<Option<Arc<AtomicBool>>>,
+    /// ETag бакетов: корень → (когда сканировали, номер записи → ETag).
+    etags: Mutex<HashMap<String, (i64, Arc<HashMap<u32, ETag>>)>>,
     /// Задачи: удаление, копирование, перемещение, загрузка.
     jobs: std::sync::OnceLock<Arc<jobs::Jobs>>,
 }
@@ -1337,7 +1342,14 @@ pub(crate) fn run_scan(app: &AppHandle, st: &Arc<AppState>, roots: Vec<String>, 
         let res = if remote {
             match s3.iter().find(|c| c.root() == root) {
                 Some(c) => match creds::get(&c.name) {
-                    Some(secret) => scan_s3(c, &secret, &st.cancel, &emit),
+                    Some(secret) => scan_s3_etags(c, &secret, &st.cancel, &emit).map(|(seg, tags)| {
+                        // ETag объектов — для поиска копий без скачивания
+                        if let Err(e) = filecat_core::dupes::save_etags(&etags_path(st, &root), seg.info.scanned_at, &tags) {
+                            eprintln!("etags {root}: {e:#}");
+                        }
+                        st.etags.lock().unwrap().remove(&root);
+                        seg
+                    }),
                     None => Err(anyhow::anyhow!("нет ключа для {root}: откройте «Изменить» и введите Secret Key")),
                 },
                 None => Err(anyhow::anyhow!("подключение {root} не найдено")),
@@ -1396,9 +1408,10 @@ fn needs_index(st: &AppState) -> Vec<String> {
         if creds::get(&c.name).is_none() {
             continue;
         }
+        let no_etags = || idx.segments.iter().any(|s| s.info.root == r && etags_of(st, &r, s.info.scanned_at).is_none());
         if !indexed(&r) {
             out.push((0, r));
-        } else if stale(&r) {
+        } else if stale(&r) || no_etags() {
             // после всего, что ещё не в индексе
             out.push((u64::MAX, r));
         }
@@ -1517,6 +1530,177 @@ fn rows(st: State<Shared>, offset: usize, count: usize) -> Vec<RowDto> {
     let hits = st.hits.lock().unwrap();
     let idx = st.index.read().unwrap();
     hits.iter().skip(offset).take(count).map(|&r| row(&idx, r)).collect()
+}
+
+// ---------- поиск дубликатов (dup: в поле поиска) ----------
+
+fn etags_path(st: &AppState, root: &str) -> PathBuf {
+    let h = blake3::hash(root.to_lowercase().as_bytes()).to_hex();
+    st.data_dir.join("etags").join(format!("{}.bin", &h[..16]))
+}
+
+/// ETag бакета, если они сняты при последнем сканировании этого сегмента.
+fn etags_of(st: &AppState, root: &str, scanned_at: i64) -> Option<Arc<HashMap<u32, ETag>>> {
+    if let Some((at, m)) = st.etags.lock().unwrap().get(root) {
+        if *at == scanned_at {
+            return Some(m.clone());
+        }
+    }
+    let m = Arc::new(filecat_core::dupes::load_etags(&etags_path(st, root), scanned_at)?);
+    st.etags.lock().unwrap().insert(root.to_string(), (scanned_at, m.clone()));
+    Some(m)
+}
+
+#[derive(Deserialize)]
+struct DupScope {
+    seg: u16,
+    dir: Option<u32>,
+}
+
+#[derive(Serialize, Clone)]
+struct DupFileDto {
+    seg: u16,
+    idx: u32,
+    /// Полный путь: s3://… у объектов хранилища.
+    full: String,
+    name: String,
+    /// Папка, где лежит файл.
+    place: String,
+    /// Название источника: «Локальный диск (C:)», «Rechka».
+    source: String,
+    mtime: i64,
+    cloud: bool,
+}
+
+#[derive(Serialize, Clone)]
+struct DupGroupDto {
+    id: String,
+    size: u64,
+    files: Vec<DupFileDto>,
+}
+
+/// Ищет копии в выбранных папках (`all` — на всех дисках и в S3 этого компьютера),
+/// среди файлов, подходящих под `query` (ext:, size:, имя). Найденные группы приходят
+/// событиями «dup-groups» сразу по мере проверки, ход — «dup-progress», конец — «dup-done».
+/// Новый поиск останавливает предыдущий. `id` — номер поиска, он приходит в событиях.
+#[tauri::command]
+fn dup_search(app: AppHandle, st: State<Shared>, id: u64, scopes: Vec<DupScope>, all: bool, query: String, gentle: bool) -> CmdResult<u64> {
+    let q = if query.trim().is_empty() { None } else { Some(Query::parse(&query).map_err(err)?) };
+    let stop = Arc::new(AtomicBool::new(false));
+    if let Some(old) = st.dup_run.lock().unwrap().replace(stop.clone()) {
+        old.store(true, Ordering::Relaxed);
+    }
+    let st = st.inner().clone();
+    std::thread::spawn(move || {
+        let opts = DupeOptions {
+            min_size: 1,
+            threads: 2,
+            background: gentle,
+            max_bytes_per_sec: if gentle { 50 << 20 } else { 0 },
+            cache_path: Some(st.data_dir.join("hashes.db")),
+            only_sizes: None,
+            include_system: false,
+        };
+        // названия источников — до блокировки индекса: sources() берёт её сама
+        let names: HashMap<String, String> =
+            crate::sources(app.state::<Shared>()).into_iter().map(|s| (s.root.to_lowercase(), s.title)).collect();
+        let idx = st.index.read().unwrap();
+        let titles: HashMap<u16, String> = idx
+            .segments
+            .iter()
+            .enumerate()
+            .filter_map(|(i, g)| names.get(&g.info.root.to_lowercase()).map(|t| (i as u16, t.clone())))
+            .collect();
+        let tags: HashMap<u16, Arc<HashMap<u32, ETag>>> = idx
+            .segments
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.is_remote())
+            .filter_map(|(i, s)| etags_of(&st, &s.info.root, s.info.scanned_at).map(|m| (i as u16, m)))
+            .collect();
+        // внутри ли папки `dir` запись `i` сегмента
+        let inside = |seg: &filecat_core::index::Segment, mut i: u32, dir: u32| loop {
+            let p = seg.entries[i as usize].parent;
+            if p == dir {
+                return true;
+            }
+            if p == filecat_core::index::NO_PARENT {
+                return false;
+            }
+            i = p;
+        };
+        let select = |r: filecat_core::index::FileRef| {
+            let seg = &idx.segments[r.seg as usize];
+            let in_scope = all || scopes.iter().any(|s| s.seg == r.seg && s.dir.is_none_or(|d| inside(seg, r.idx, d)));
+            in_scope && q.as_ref().is_none_or(|q| q.matches_at(seg, r.idx))
+        };
+        let etag = |r: filecat_core::index::FileRef| tags.get(&r.seg).and_then(|m| m.get(&r.idx).copied());
+        // найденное копим и отдаём пачками — групп бывают тысячи
+        let pending: Mutex<(Vec<DupGroupDto>, Instant)> = Mutex::new((Vec::new(), Instant::now()));
+        let dto = |g: &DupeGroup| DupGroupDto {
+            id: format!("{}:{}", g.size, blake3::Hash::from(g.hash).to_hex()),
+            size: g.size,
+            files: g
+                .files
+                .iter()
+                .map(|&r| {
+                    let s = &idx.segments[r.seg as usize];
+                    DupFileDto {
+                        seg: r.seg,
+                        idx: r.idx,
+                        full: s.path(r.idx).to_string_lossy().into_owned(),
+                        name: s.name(r.idx).to_string(),
+                        place: s.parent_path(r.idx).to_string_lossy().into_owned(),
+                        source: titles.get(&r.seg).cloned().unwrap_or_else(|| s.info.root.clone()),
+                        mtime: s.entries[r.idx as usize].mtime,
+                        cloud: s.is_remote(),
+                    }
+                })
+                .collect(),
+        };
+        let flush = |force: bool| {
+            let mut p = pending.lock().unwrap();
+            if !p.0.is_empty() && (force || p.1.elapsed() >= Duration::from_millis(300)) {
+                let batch = std::mem::take(&mut p.0);
+                p.1 = Instant::now();
+                let _ = app.emit("dup-groups", json!({ "id": id, "groups": batch }));
+            }
+        };
+        let res = find_duplicates_in(
+            &idx,
+            &opts,
+            &select,
+            &etag,
+            &stop,
+            &|p| {
+                let _ = app.emit("dup-progress", json!({ "id": id, "p": p }));
+                flush(false);
+            },
+            &|g| {
+                pending.lock().unwrap().0.push(dto(&g));
+                flush(false);
+            },
+        );
+        flush(true);
+        drop(idx);
+        let out = match res {
+            Ok(rep) => json!({ "id": id, "stats": rep.stats }),
+            Err(e) => json!({ "id": id, "error": if stop.load(Ordering::Relaxed) { "остановлено".to_string() } else { e.to_string() } }),
+        };
+        let _ = app.emit("dup-done", out);
+        let mut cur = st.dup_run.lock().unwrap();
+        if cur.as_ref().is_some_and(|c| Arc::ptr_eq(c, &stop)) {
+            *cur = None;
+        }
+    });
+    Ok(id)
+}
+
+#[tauri::command]
+fn dup_stop(st: State<Shared>) {
+    if let Some(s) = st.dup_run.lock().unwrap().take() {
+        s.store(true, Ordering::Relaxed);
+    }
 }
 
 #[tauri::command]
@@ -1799,6 +1983,8 @@ fn main() {
         p2p: std::sync::OnceLock::new(),
         p2p_error: Mutex::new(String::new()),
         jobs: std::sync::OnceLock::new(),
+        dup_run: Mutex::new(None),
+        etags: Mutex::new(HashMap::new()),
     });
 
     let mut builder = tauri::Builder::default();
@@ -1859,6 +2045,8 @@ fn main() {
             s3_refresh,
             preview,
             search_folder,
+            dup_search,
+            dup_stop,
             about,
             update::update_check,
             update::update_install,

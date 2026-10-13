@@ -4,6 +4,10 @@
 //!   3) полное сравнение: файлы группы читаются поблочно параллельно,
 //!      разошедшиеся отбрасываются сразу, не дочитываясь до конца.
 //! Хеши кэшируются в SQLite по ключу (путь, размер, mtime).
+//!
+//! Объекты S3 не читаются: их ETag (у обычных загрузок — MD5 содержимого) приходит
+//! в списке объектов. Копии в S3 находятся по ETag, а локальный файл того же размера
+//! сверяется с ними по MD5, посчитанному у себя.
 
 use crate::index::{FileRef, Index};
 use crate::safety::{file_id, is_protected};
@@ -28,6 +32,40 @@ const MAX_BLOCK: u64 = 64 * READ_BUF as u64;
 const FLUSH_SECS: u64 = 5;
 
 pub type Hash = [u8; 32];
+
+/// ETag объекта S3: MD5 содержимого (`parts` = 0) или, у загруженных частями,
+/// MD5 от MD5 частей и число частей («…-12»).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ETag {
+    pub md5: [u8; 16],
+    pub parts: u32,
+}
+
+impl ETag {
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim().trim_start_matches("W/").trim_matches('"');
+        let (hex, parts) = match s.split_once('-') {
+            Some((h, n)) => (h, n.parse().ok()?),
+            None => (s, 0),
+        };
+        if hex.len() != 32 {
+            return None;
+        }
+        let mut md5 = [0u8; 16];
+        for (i, b) in md5.iter_mut().enumerate() {
+            *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok()?;
+        }
+        Some(Self { md5, parts })
+    }
+
+    fn as_hash(&self) -> Hash {
+        let mut h = blake3::Hasher::new();
+        h.update(b"s3-etag");
+        h.update(&self.md5);
+        h.update(&self.parts.to_le_bytes());
+        *h.finalize().as_bytes()
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct DupeOptions {
@@ -151,6 +189,11 @@ struct Shared<'a> {
     wasted: AtomicU64,
     current: Mutex<Option<String>>,
     on_group: &'a (dyn Fn(DupeGroup) + Sync),
+    /// Размеры, у которых есть объекты S3: такие локальные группы ждут сверки с ними.
+    s3_sizes: HashSet<u64>,
+    held: Mutex<Vec<DupeGroup>>,
+    /// Всё, что отдано наружу, — для итогового отчёта.
+    emitted: Mutex<Vec<DupeGroup>>,
     ticker: Ticker,
     cancel: &'a AtomicBool,
     progress: &'a (dyn Fn(&DupeProgress) + Sync),
@@ -186,19 +229,33 @@ impl Shared<'_> {
         self.cache.get(&it.key).filter(|c| c.size == it.size && c.mtime == it.mtime).copied()
     }
 
-    /// Подтверждённая группа: учитываем и сразу отдаём наружу.
+    /// Подтверждённая группа: учитываем и сразу отдаём наружу
+    /// (если у этого размера есть объекты S3 — после сверки с ними).
     fn found(&self, items: &[Item], idxs: &[usize], hash: Hash) {
         if idxs.len() < 2 {
             return;
         }
         let size = items[idxs[0]].size;
-        let extra = idxs.len() as u64 - 1;
-        self.groups.fetch_add(1, Ordering::Relaxed);
-        self.copies.fetch_add(extra, Ordering::Relaxed);
-        self.wasted.fetch_add(size * extra, Ordering::Relaxed);
         let mut sorted: Vec<&Item> = idxs.iter().map(|&i| &items[i]).collect();
         sorted.sort_by(|a, b| a.key.cmp(&b.key));
-        (self.on_group)(DupeGroup { size, hash, files: sorted.iter().map(|it| it.r).collect() });
+        let g = DupeGroup { size, hash, files: sorted.iter().map(|it| it.r).collect() };
+        if self.s3_sizes.contains(&size) {
+            self.held.lock().unwrap().push(g);
+        } else {
+            self.emit(g);
+        }
+    }
+
+    fn emit(&self, g: DupeGroup) {
+        if g.files.len() < 2 {
+            return;
+        }
+        let extra = g.files.len() as u64 - 1;
+        self.groups.fetch_add(1, Ordering::Relaxed);
+        self.copies.fetch_add(extra, Ordering::Relaxed);
+        self.wasted.fetch_add(g.size * extra, Ordering::Relaxed);
+        (self.on_group)(g.clone());
+        self.emitted.lock().unwrap().push(g);
     }
 
     fn remember(&self, it: &Item, partial: Hash, full: Option<Hash>) {
@@ -251,6 +308,20 @@ pub fn find_duplicates_live(
     progress: &(dyn Fn(&DupeProgress) + Sync),
     on_group: &(dyn Fn(DupeGroup) + Sync),
 ) -> Result<DupeReport> {
+    find_duplicates_in(index, opts, &|_| true, &|_| None, cancel, progress, on_group)
+}
+
+/// Поиск среди выбранных файлов (`select`: папки, фильтры) — на дисках и в S3.
+/// `etag` даёт ETag объекта S3; объекты без него не участвуют.
+pub fn find_duplicates_in(
+    index: &Index,
+    opts: &DupeOptions,
+    select: &(dyn Fn(FileRef) -> bool + Sync),
+    etag: &(dyn Fn(FileRef) -> Option<ETag> + Sync),
+    cancel: &AtomicBool,
+    progress: &(dyn Fn(&DupeProgress) + Sync),
+    on_group: &(dyn Fn(DupeGroup) + Sync),
+) -> Result<DupeReport> {
     let started = Instant::now();
     let mut stats = DupeStats::default();
 
@@ -258,23 +329,43 @@ pub fn find_duplicates_live(
     let mut by_size: HashMap<u64, Vec<FileRef>> = HashMap::new();
     let min = opts.min_size.max(1);
     for (si, seg) in index.segments.iter().enumerate() {
-        // содержимое облачных объектов здесь не читаем
-        if seg.is_remote() {
-            continue;
-        }
-        for (i, e) in seg.entries.iter().enumerate() {
-            if !e.is_dir()
-                && !e.is_symlink()
-                && !e.is_deleted()
-                && e.size >= min
-                && opts.only_sizes.as_ref().is_none_or(|s| s.contains(&e.size))
-            {
-                by_size.entry(e.size).or_default().push(FileRef { seg: si as u16, idx: i as u32 });
-            }
+        let remote = seg.is_remote();
+        let found: Vec<FileRef> = seg
+            .entries
+            .par_iter()
+            .enumerate()
+            .filter(|(_, e)| {
+                !e.is_dir()
+                    && !e.is_symlink()
+                    && !e.is_deleted()
+                    && e.size >= min
+                    && opts.only_sizes.as_ref().is_none_or(|s| s.contains(&e.size))
+            })
+            .map(|(i, _)| FileRef { seg: si as u16, idx: i as u32 })
+            // облачные объекты не читаем — участвуют только те, у кого есть ETag
+            .filter(|&r| select(r) && (!remote || etag(r).is_some()))
+            .collect();
+        for r in found {
+            by_size.entry(index.entry(r).size).or_default().push(r);
         }
     }
     by_size.retain(|_, v| v.len() > 1);
-    let refs: Vec<FileRef> = by_size.into_values().flatten().collect();
+    let is_remote = |r: &FileRef| index.segments[r.seg as usize].is_remote();
+    let s3_sizes: HashSet<u64> = by_size.iter().filter(|(_, v)| v.iter().any(is_remote)).map(|(s, _)| *s).collect();
+    // объекты S3 по размеру и ETag; локальные — отдельно
+    let mut s3: HashMap<u64, HashMap<ETag, Vec<FileRef>>> = HashMap::new();
+    let mut refs: Vec<FileRef> = Vec::new();
+    for v in by_size.into_values() {
+        for r in v {
+            if is_remote(&r) {
+                if let Some(t) = etag(r) {
+                    s3.entry(index.entry(r).size).or_default().entry(t).or_default().push(r);
+                }
+            } else {
+                refs.push(r);
+            }
+        }
+    }
     let mut items: Vec<Item> = refs
         .par_iter()
         .map(|&r| {
@@ -287,14 +378,15 @@ pub fn find_duplicates_live(
         let before = items.len();
         items.retain(|it| index.entry(it.r).flags & crate::index::flags::SYSTEM == 0 && !is_protected(&it.path));
         stats.skipped_system = (before - items.len()) as u64;
-        // после отсева у части размеров могло остаться по одному файлу
-        let mut count: HashMap<u64, u32> = HashMap::new();
-        for it in &items {
-            *count.entry(it.size).or_default() += 1;
-        }
-        items.retain(|it| count[&it.size] > 1);
     }
-    stats.candidates = items.len() as u64;
+    let mut count: HashMap<u64, u32> = HashMap::new();
+    for it in &items {
+        *count.entry(it.size).or_default() += 1;
+    }
+    // единственный локальный файл своего размера может совпасть только с объектом S3
+    let (lonely, items): (Vec<Item>, Vec<Item>) = items.into_iter().partition(|it| count[&it.size] < 2);
+    let lonely: Vec<Item> = lonely.into_iter().filter(|it| s3_sizes.contains(&it.size)).collect();
+    stats.candidates = (items.len() + lonely.len()) as u64 + s3.values().flat_map(|m| m.values()).map(|v| v.len() as u64).sum::<u64>();
 
     let cache_db = match &opts.cache_path {
         Some(p) => Some(HashCache::open(p)?),
@@ -319,11 +411,26 @@ pub fn find_duplicates_live(
         wasted: AtomicU64::new(0),
         current: Mutex::new(None),
         on_group,
+        s3_sizes,
+        held: Mutex::new(Vec::new()),
+        emitted: Mutex::new(Vec::new()),
         ticker: Ticker::new(150),
         cancel,
         progress,
     };
     let pool = build_pool(opts.threads, opts.background)?;
+
+    let local_sizes: HashSet<u64> = items.iter().chain(&lonely).map(|it| it.size).collect();
+    for (size, by_tag) in &s3 {
+        if local_sizes.contains(size) {
+            continue;
+        }
+        for (t, files) in by_tag {
+            let mut files = files.clone();
+            files.sort_by_key(|r| index.path(*r));
+            sh.emit(DupeGroup { size: *size, hash: t.as_hash(), files });
+        }
+    }
 
     // 2) частичный хеш
     sh.begin_stage(Stage::Partial, items.len() as u64);
@@ -417,26 +524,55 @@ pub fn find_duplicates_live(
     sh.flush();
     check_cancel(cancel)?;
     stats.full_hashed = total_full;
+    let _ = full;
 
-    let mut out: HashMap<(u64, Hash), Vec<FileRef>> = HashMap::new();
-    for idxs in groups.values() {
-        for &i in idxs {
-            let it = &items[i];
-            let h = if it.size > 2 * CHUNK { full.get(&i).copied() } else { partial[i] };
-            if let Some(h) = h {
-                out.entry((it.size, h)).or_default().push(it.r);
+    // 4) сверка с S3: локальная группа (или одиночка) того же размера сравнивается
+    //    с ETag объектов по MD5, посчитанному у себя
+    let held = std::mem::take(&mut *sh.held.lock().unwrap());
+    let mut units: Vec<(Vec<FileRef>, PathBuf, u64, Hash)> =
+        held.iter().map(|g| (g.files.clone(), index.path(g.files[0]), g.size, g.hash)).collect();
+    for it in &lonely {
+        units.push((vec![it.r], it.path.clone(), it.size, [0u8; 32]));
+    }
+    units.sort_by_key(|u| std::cmp::Reverse(u.2));
+    sh.bytes_total.fetch_add(units.iter().map(|u| u.2).sum::<u64>(), Ordering::Relaxed);
+    sh.begin_stage(Stage::Full, total_full + units.len() as u64);
+    let mut merged: HashMap<(u64, ETag), Vec<FileRef>> = HashMap::new();
+    for (files, path, size, hash) in units {
+        check_cancel(cancel)?;
+        let wanted: Vec<ETag> = s3.get(&size).map(|m| m.keys().copied().collect()).unwrap_or_default();
+        *sh.current.lock().unwrap() = Some(path.to_string_lossy().into_owned());
+        let hit = pool.install(|| local_etag_match(&path, size, &wanted, &sh));
+        sh.done.fetch_add(1, Ordering::Relaxed);
+        match hit {
+            Some(t) => merged.entry((size, t)).or_default().extend(files),
+            None if files.len() > 1 => sh.emit(DupeGroup { size, hash, files }),
+            None => {}
+        }
+    }
+    for ((size, t), mut files) in merged {
+        if let Some(cloud) = s3.get(&size).and_then(|m| m.get(&t)) {
+            files.extend(cloud.iter().copied());
+        }
+        files.sort_by_key(|r| index.path(*r));
+        sh.emit(DupeGroup { size, hash: t.as_hash(), files });
+    }
+    // объекты S3, к которым не нашлось локальных, но копии есть внутри S3
+    for (size, by_tag) in &s3 {
+        if !local_sizes.contains(size) {
+            continue;
+        }
+        for (t, files) in by_tag {
+            if files.len() > 1 && !sh.emitted.lock().unwrap().iter().any(|g| g.size == *size && g.hash == t.as_hash()) {
+                let mut files = files.clone();
+                files.sort_by_key(|r| index.path(*r));
+                sh.emit(DupeGroup { size: *size, hash: t.as_hash(), files });
             }
         }
     }
+    sh.flush();
 
-    let mut groups: Vec<DupeGroup> = out
-        .into_iter()
-        .filter(|(_, v)| v.len() > 1)
-        .map(|((size, hash), mut files)| {
-            files.sort_by_key(|r| index.path(*r));
-            DupeGroup { size, hash, files }
-        })
-        .collect();
+    let mut groups = std::mem::take(&mut *sh.emitted.lock().unwrap());
     groups.sort_by(|a, b| b.wasted().cmp(&a.wasted()).then(a.size.cmp(&b.size)));
 
     stats.cache_hits = sh.hits.load(Ordering::Relaxed);
@@ -672,6 +808,126 @@ fn hash_full(path: &Path, sh: &Shared) -> Option<Hash> {
     r.map_err(|_| sh.errors.fetch_add(1, Ordering::Relaxed)).ok()
 }
 
+/// ETag объектов бакета (номер записи сегмента → ETag) хранятся рядом с индексом,
+/// отдельным файлом: формат индекса из-за них не меняется. `scanned_at` связывает
+/// файл с конкретным сканированием сегмента — после пересканирования старый не подойдёт.
+pub fn save_etags(path: &Path, scanned_at: i64, etags: &[(u32, String)]) -> Result<()> {
+    let list: Vec<(u32, ETag)> = etags.iter().filter_map(|(i, t)| Some((*i, ETag::parse(t)?))).collect();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("tmp");
+    {
+        let f = std::fs::File::create(&tmp)?;
+        let mut enc = zstd::Encoder::new(std::io::BufWriter::new(f), 3)?;
+        bincode::serialize_into(&mut enc, &(scanned_at, list))?;
+        enc.finish()?;
+    }
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+pub fn load_etags(path: &Path, scanned_at: i64) -> Option<HashMap<u32, ETag>> {
+    use bincode::Options;
+    let f = std::fs::File::open(path).ok()?;
+    let limit = f.metadata().ok()?.len().saturating_mul(16).max(64 << 20);
+    let dec = zstd::Decoder::new(f).ok()?;
+    let opts = bincode::DefaultOptions::new().with_fixint_encoding().allow_trailing_bytes().with_limit(limit);
+    let (at, list): (i64, Vec<(u32, ETag)>) = opts.deserialize_from(dec).ok()?;
+    (at == scanned_at).then(|| list.into_iter().collect())
+}
+
+/// Совпадает ли локальный файл с одним из ETag: обычный MD5 или, у загруженных частями,
+/// MD5 частей при обычных размерах частей (5, 8, 16 МБ и т.п.). Файл читается один раз.
+fn local_etag_match(path: &Path, size: u64, wanted: &[ETag], sh: &Shared) -> Option<ETag> {
+    use md5::{Digest, Md5};
+    if wanted.is_empty() {
+        return None;
+    }
+    const MIB: u64 = 1 << 20;
+    // кандидаты размера части для каждого числа частей
+    let mut plans: Vec<(u32, u64)> = Vec::new();
+    for t in wanted.iter().filter(|t| t.parts > 0) {
+        let n = t.parts as u64;
+        let exact = size.div_ceil(n);
+        let mut cands = vec![exact, exact.div_ceil(MIB) * MIB];
+        cands.extend([5, 8, 10, 15, 16, 25, 32, 50, 64, 100, 128, 256, 512].map(|m| m * MIB));
+        for p in cands {
+            if p > 0 && size.div_ceil(p) == n && !plans.contains(&(t.parts, p)) {
+                plans.push((t.parts, p));
+            }
+        }
+    }
+    let simple = wanted.iter().any(|t| t.parts == 0);
+    struct Plan {
+        parts: u32,
+        part: u64,
+        cur: Md5,
+        filled: u64,
+        digests: Vec<u8>,
+    }
+    let mut ps: Vec<Plan> = plans.iter().map(|&(parts, part)| Plan { parts, part, cur: Md5::new(), filled: 0, digests: Vec::new() }).collect();
+    let mut whole = Md5::new();
+    let r = (|| -> std::io::Result<()> {
+        let mut f = open_shared(path, true)?;
+        let mut buf = vec![0u8; READ_BUF];
+        loop {
+            if sh.cancel.load(Ordering::Relaxed) {
+                return Err(std::io::Error::other("cancelled"));
+            }
+            sh.limiter.acquire(READ_BUF as u64);
+            let n = f.read(&mut buf)?;
+            if n == 0 {
+                break;
+            }
+            let data = &buf[..n];
+            if simple {
+                whole.update(data);
+            }
+            for p in &mut ps {
+                let mut rest = data;
+                while !rest.is_empty() {
+                    let take = ((p.part - p.filled) as usize).min(rest.len());
+                    p.cur.update(&rest[..take]);
+                    p.filled += take as u64;
+                    rest = &rest[take..];
+                    if p.filled == p.part {
+                        let d = std::mem::replace(&mut p.cur, Md5::new()).finalize();
+                        p.digests.extend_from_slice(&d);
+                        p.filled = 0;
+                    }
+                }
+            }
+            sh.bytes.fetch_add(n as u64, Ordering::Relaxed);
+            sh.bytes_done.fetch_add(n as u64, Ordering::Relaxed);
+            sh.report(false);
+        }
+        Ok(())
+    })();
+    if r.is_err() {
+        sh.errors.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
+    if simple {
+        let md5: [u8; 16] = whole.finalize().into();
+        if let Some(t) = wanted.iter().find(|t| t.parts == 0 && t.md5 == md5) {
+            return Some(*t);
+        }
+    }
+    for mut p in ps {
+        if p.filled > 0 {
+            let d = p.cur.finalize_reset();
+            p.digests.extend_from_slice(&d);
+        }
+        let md5: [u8; 16] = Md5::digest(&p.digests).into();
+        let t = ETag { md5, parts: p.parts };
+        if wanted.contains(&t) {
+            return Some(t);
+        }
+    }
+    None
+}
+
 struct HashCache {
     conn: Connection,
 }
@@ -773,6 +1029,69 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec![vec!["a.bin", "b.bin"], vec!["small1.txt", "small2.txt"]]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn etag_parse() {
+        let t = ETag::parse("\"9b2cf535f27731c974343645a3985328\"").unwrap();
+        assert_eq!(t.parts, 0);
+        assert_eq!(t.md5[0], 0x9b);
+        assert_eq!(ETag::parse("\"d41d8cd98f00b204e9800998ecf8427e-12\"").unwrap().parts, 12);
+        assert!(ETag::parse("not-an-etag").is_none());
+    }
+
+    /// Локальный файл совпадает с объектом S3, загруженным частями по 8 МБ;
+    /// два одинаковых объекта S3 находятся без локальных; разные — нет.
+    #[test]
+    fn matches_s3_by_etag() {
+        use crate::index::{SegmentBuilder, SourceInfo, SourceKind, NO_PARENT};
+        use md5::{Digest, Md5};
+        let base = std::env::temp_dir();
+        let base = if crate::safety::is_protected(&base.join("x")) { std::env::current_dir().unwrap() } else { base };
+        let dir = base.join(format!("filecat-etag-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let data: Vec<u8> = (0..(20u64 << 20) + 3).map(|i| (i * 31 % 251) as u8).collect();
+        std::fs::write(dir.join("a.bin"), &data).unwrap();
+        std::fs::write(dir.join("b.txt"), b"unique local text").unwrap();
+
+        // ETag частями по 8 МБ, как у aws cli
+        let mut parts = Vec::new();
+        for chunk in data.chunks(8 << 20) {
+            parts.extend_from_slice(&Md5::digest(chunk));
+        }
+        let multipart = ETag { md5: Md5::digest(&parts).into(), parts: 3 };
+        let other = ETag { md5: Md5::digest(b"something else!!!").into(), parts: 0 };
+        let pair = ETag { md5: Md5::digest(b"0123456789").into(), parts: 0 };
+
+        let cancel = AtomicBool::new(false);
+        let mut index = Index::default();
+        index.upsert(scan_walk(&dir, &ScanOptions::default(), &cancel, &|_| {}).unwrap());
+        let mut b = SegmentBuilder::default();
+        let x = b.push(NO_PARENT, "x.bin", 0, data.len() as u64, 1);
+        let y = b.push(NO_PARENT, "y.txt", 0, 17, 1);
+        let z = b.push(NO_PARENT, "z.txt", 0, 10, 1);
+        let w = b.push(NO_PARENT, "w.txt", 0, 10, 1);
+        let info = SourceInfo { root: "s3://test/".into(), kind: SourceKind::S3, scanned_at: 0, scan_ms: 0, files: 4, dirs: 0, bytes: 0, errors: 0 };
+        index.upsert(b.finish(info));
+        let tags: HashMap<u32, ETag> = [(x, multipart), (y, other), (z, pair), (w, pair)].into_iter().collect();
+        let cloud = index.segments.iter().position(|s| s.is_remote()).unwrap() as u16;
+        let etag = |r: FileRef| if r.seg == cloud { tags.get(&r.idx).copied() } else { None };
+
+        let opts = DupeOptions { max_bytes_per_sec: 0, ..Default::default() };
+        let rep = find_duplicates_in(&index, &opts, &|_| true, &etag, &cancel, &|_| {}, &|_| {}).unwrap();
+        let mut names: Vec<Vec<String>> = rep
+            .groups
+            .iter()
+            .map(|g| {
+                let mut v: Vec<String> = g.files.iter().map(|&r| index.name(r).to_string()).collect();
+                v.sort();
+                v
+            })
+            .collect();
+        names.sort();
+        assert_eq!(names, vec![vec!["a.bin", "x.bin"], vec!["w.txt", "z.txt"]]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

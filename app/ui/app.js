@@ -408,6 +408,7 @@ const D_ICON = {
   path: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4.5v8h13v-7H7.5l-1.5-1.5h-4.5z" fill="none" stroke="currentColor"/></svg>',
   query: '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor"/><path d="M8 4.5V8l2.5 1.5" fill="none" stroke="currentColor"/></svg>',
   go: '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h9M8.5 4.5 12 8l-3.5 3.5" fill="none" stroke="currentColor"/></svg>',
+  dup: '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="8.5" height="8.5" rx="1.5" fill="none" stroke="currentColor"/><rect x="5.5" y="5.5" width="8.5" height="8.5" rx="1.5" fill="none" stroke="currentColor"/></svg>',
 };
 const Dd = { items: [], sel: -1 };
 
@@ -418,6 +419,10 @@ function suggestions(q) {
   const paths = loadHist().map((x) => ({ kind: 'path', path: x.path, peer: x.peer || null, dev: peerName(x.peer), key: x.path }));
   const queries = loadKey(QHIST_KEY).map((x) => ({ kind: 'query', q: x.q, where: x.where, peer: x.peer || null, dev: peerName(x.peer), key: `${x.q}\n${x.where}` }));
   if (!q) return [...queries.slice(0, 5), ...paths.slice(0, 8)];
+  // «дуб», «dup» — найти дубликаты здесь или на всех дисках
+  if (/^(dup|дуб|копи)/i.test(q) && !dupParse(q)) {
+    return [{ kind: 'dup', all: false, label: `Найти дубликаты в «${folderLabel() || 'этой папке'}»` }, { kind: 'dup', all: true, label: 'Найти дубликаты на всех дисках' }];
+  }
   if (looksLikePath(q)) {
     return [{ kind: 'go', path: q }, ...paths.filter((x) => x.path.toLowerCase().startsWith(low) && x.path.toLowerCase() !== low).slice(0, 8)];
   }
@@ -436,13 +441,14 @@ function renderDrop() {
   if (!Dd.items.length) { drop.classList.add('hidden'); return; }
   const here = Bz.data?.path;
   drop.innerHTML = Dd.items.map((x, i) => {
-    const icon = D_ICON[x.kind];
-    const body = x.kind === 'go' ? `Перейти: <b>${esc(x.path)}</b>`
+    const icon = D_ICON[x.kind] || D_ICON.dup;
+    const body = x.kind === 'dup' ? `<b>${esc(x.label)}</b><small>${x.all ? 'dup:all' : 'dup:'} — одинаковые файлы, крупные сверху</small>`
+      : x.kind === 'go' ? `Перейти: <b>${esc(x.path)}</b>`
       : x.kind === 'path' ? `<b>${esc(baseName(x.path.replace(/[\\/]$/, '')) || x.path)}</b><small>${x.dev ? esc(x.dev) + ' · ' : ''}${esc(x.path)}</small>`
       : `<b>${esc(x.q)}</b><small>${x.where === here ? 'в этой папке' : 'в ' + esc(x.where)}</small>`;
-    const del = x.kind === 'go' ? '' : `<span class="del" data-del="${i}" title="Удалить из истории">×</span>`;
+    const del = x.kind === 'go' || x.kind === 'dup' ? '' : `<span class="del" data-del="${i}" title="Удалить из истории">×</span>`;
     return `<div class="sug" data-i="${i}"><span class="ico">${icon}</span><span class="txt">${body}</span>${del}</div>`;
-  }).join('') + (q ? '' : '<div class="drop-hint">Начните вводить имя — поиск в этой папке и вложенных. Фильтры: ext:mp3 · size:&gt;10mb · type:dir · -слово</div>');
+  }).join('') + (q ? '' : '<div class="drop-hint">Начните вводить имя — поиск в этой папке и вложенных. Фильтры: ext:mp3 · size:&gt;10mb · type:dir · -слово · dup: — дубликаты</div>');
   drop.classList.remove('hidden');
 }
 function markSug() {
@@ -453,6 +459,12 @@ async function pickSug(i) {
   const x = Dd.items[i];
   if (!x) return;
   $('#omni-drop').classList.add('hidden');
+  if (x.kind === 'dup') {
+    $('#b-q').value = x.all ? 'dup:all' : 'dup:';
+    pushQuery($('#b-q').value);
+    runFind();
+    return;
+  }
   if (x.kind === 'query') {
     // прошлый поиск: в ту же папку, тот же запрос
     if (Bz.data?.path !== x.where || (curSource()?.peer || null) !== x.peer) { clearQuery(); await goPath(x.where, x.peer); }
@@ -487,7 +499,10 @@ function clearQuery() {
 async function runFind() {
   const q = $('#b-q').value.trim();
   Fz.query = looksLikePath(q) ? '' : q;
-  if (!Fz.query) { Fz.data = null; if (Bz.data) renderBrowse(); return; }
+  if (!Fz.query) { Fz.data = null; dupStop(); if (Bz.data) renderBrowse(); return; }
+  const dp = dupParse(Fz.query);
+  if (dp) { runDups(dp); return; }
+  dupStop();
   const s = curSource();
   const my = ++Fz.seq;
   if (Bz.live || !s || s.seg == null) {
@@ -556,6 +571,119 @@ $('#b-q').addEventListener('keydown', async (e) => {
   }
 });
 
+// ---------- дубликаты: dup: в поле поиска ----------
+// «dup:» — в открытой папке и вложенных, «dup:all» — на всех дисках и в S3; остальное в
+// запросе — обычные фильтры (ext:, size:, имя). Что делать с найденным, решает человек:
+// строки — обычные файлы, их можно выделять, удалять, копировать.
+const Dz = { id: 0, key: '', groups: [], progress: null, done: false, error: '', stats: null, all: false, timer: null, started: 0 };
+function dupParse(q) {
+  let on = false, all = false;
+  const rest = q.split(/\s+/).filter((t) => {
+    const m = /^(dup|дубли|дубликаты|копии):(all|все|всё)?$/i.exec(t);
+    if (!m) return true;
+    on = true;
+    all = all || !!m[2];
+    return false;
+  });
+  return on ? { all, rest: rest.join(' ') } : null;
+}
+function dupStop() {
+  if (Dz.id && !Dz.done) invoke('dup_stop').catch(() => {});
+  Dz.key = '';
+}
+async function runDups(p) {
+  const s = curSource();
+  const key = `${p.all}|${p.rest}|${keyOf(s || {})}|${p.all ? '' : Bz.dir}`;
+  if (key === Dz.key && Fz.data?.dups) { renderBrowse(); return; }
+  Dz.key = key;
+  Object.assign(Dz, { id: Date.now(), groups: [], progress: null, done: false, error: '', stats: null, all: p.all, started: Date.now() });
+  Fz.data = { dups: true };
+  Bz.sel = -1;
+  Bz.shown = 2000;
+  $('#b-list').scrollTop = 0;
+  if (!p.all && s?.peer) { Dz.done = true; Dz.error = 'Дубликаты на другом компьютере — в следующей версии. Сейчас: диски и S3 этого компьютера (dup:all).'; renderBrowse(); return; }
+  if (!p.all && (!s || s.seg == null)) { Dz.done = true; Dz.error = 'Этот источник ещё индексируется — поиск дубликатов станет доступен, когда индекс будет готов.'; renderBrowse(); return; }
+  renderBrowse();
+  try {
+    await invoke('dup_search', { id: Dz.id, scopes: p.all ? [] : [{ seg: s.seg, dir: Bz.dir }], all: p.all, query: p.rest, gentle: $('#s-gentle').checked });
+  } catch (e) { Dz.done = true; Dz.error = String(e); renderBrowse(); }
+}
+// перерисовка не чаще пары раз в секунду: группы приходят пачками
+function dupSoon() {
+  if (Dz.timer) return;
+  Dz.timer = setTimeout(() => { Dz.timer = null; if (Fz.data?.dups) renderBrowse(); }, 400);
+}
+listen('dup-groups', ({ payload }) => {
+  if (payload.id !== Dz.id) return;
+  Dz.groups.push(...payload.groups);
+  dupSoon();
+});
+listen('dup-progress', ({ payload }) => {
+  if (payload.id !== Dz.id) return;
+  Dz.progress = payload.p;
+  dupSoon();
+});
+listen('dup-done', ({ payload }) => {
+  if (payload.id !== Dz.id) return;
+  Dz.done = true;
+  Dz.error = payload.error || '';
+  Dz.stats = payload.stats || null;
+  if (Fz.data?.dups) renderBrowse();
+});
+const wastedOf = (g) => g.size * (g.files.length - 1);
+const STAGE = { grouping: 'подбираю кандидатов', partial: 'сравниваю начало и конец файлов', full: 'сравниваю содержимое', done: 'готово' };
+
+function renderDups() {
+  $$('#b-head [data-bsort]').forEach((b) => { b.classList.remove('sorted'); b.dataset.arrow = ''; });
+  $('#b-head [data-bsort="files"]').textContent = 'Где';
+  const groups = Dz.groups.slice().sort((a, b) => wastedOf(b) - wastedOf(a) || b.size - a.size);
+  // строки — файлы групп подряд; заголовки групп — не строки, их не выделить
+  Bz.rows = [];
+  const parts = [];
+  for (const g of groups) {
+    if (Bz.rows.length >= Bz.shown) break;
+    parts.push(`<div class="dup-head"><b>${esc(g.files[0].name)}</b><span class="muted">${g.files.length} ${g.files.length < 5 ? 'копии' : 'копий'} по ${fmtSize(g.size)}</span>${g.files.some((f) => f.cloud) ? '<span class="dup-cloud">есть в S3</span>' : ''}<span class="spacer"></span><span class="dup-free">−${fmtSize(wastedOf(g))}</span></div>`);
+    for (const f of g.files) {
+      const i = Bz.rows.length;
+      Bz.rows.push({ ...f, is_dir: false, size: g.size, files: 1, group: g.id });
+      parts.push(`<div class="brow item dup${Bz.sels.has(i) || (!Bz.sels.size && i === Bz.sel) ? ' sel' : ''}" data-i="${i}">
+        <span class="ico">${ICON.file}</span>
+        <span class="name" title="${esc(f.full)}">${esc(f.name)} <small class="place">${esc(f.place)}</small></span>
+        <span class="muted">${f.mtime ? fmtDate(f.mtime) : ''}</span>
+        <span class="muted">${typeOf({ name: f.name })}</span>
+        <span class="num">${fmtSize(g.size)}</span>
+        <span class="num muted" title="${esc(f.source)}">${esc(f.source)}</span></div>`);
+    }
+  }
+  restoreSel();
+  const total = groups.reduce((a, g) => a + g.files.length, 0);
+  const more = total > Bz.rows.length ? `<div class="more"><button id="b-more">Показать ещё (${fmtNum(total - Bz.rows.length)} файлов)</button></div>` : '';
+  const empty = Dz.done
+    ? `<p class="more muted">${Dz.error ? esc(Dz.error) : 'Одинаковых файлов не найдено.'}</p>`
+    : '<p class="more muted">Ищу одинаковые файлы… Первые группы появятся здесь, как только подтвердятся.</p>';
+  $('#b-list').innerHTML = parts.length ? parts.join('') + more : empty;
+  $('#b-more')?.addEventListener('click', () => { Bz.shown += 3000; renderBrowse(); });
+
+  // низ: ход поиска, итог и где искать
+  const freed = groups.reduce((a, g) => a + wastedOf(g), 0);
+  const copies = groups.reduce((a, g) => a + g.files.length - 1, 0);
+  const found = groups.length ? `групп: ${fmtNum(groups.length)} · лишних копий: ${fmtNum(copies)} · можно освободить ${fmtSize(freed)}` : 'пока не найдено';
+  const p = Dz.progress;
+  const prog = Dz.done ? (Dz.error && groups.length ? ` · ${esc(Dz.error)}` : ` · за ${Math.max(1, Math.round((Date.now() - Dz.started) / 1000))} с`)
+    : p ? ` · ${STAGE[p.stage] || p.stage}${p.stage === 'full' && p.bytes_total ? ` ${Math.floor((p.bytes_done / p.bytes_total) * 100)}%` : p.total ? ` ${fmtNum(p.done)} из ${fmtNum(p.total)}` : ''}` : ' · начинаю…';
+  const where = Dz.all ? 'на всех дисках' : `в «${esc(folderLabel())}»`;
+  const other = Dz.all ? `<button data-dup="here">искать только в «${esc(folderLabel())}»</button>` : '<button data-dup="all">искать на всех дисках</button>';
+  $('#b-foot').innerHTML = `Дубликаты ${where}: ${found}${prog} ${other}${Dz.done ? '' : ' <button data-dup="stop">Остановить</button>'}`;
+}
+$('#b-foot').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-dup]');
+  if (!b) return;
+  if (b.dataset.dup === 'stop') { invoke('dup_stop').catch(() => {}); return; }
+  const p = dupParse(Fz.query) || { rest: '' };
+  $('#b-q').value = [b.dataset.dup === 'all' ? 'dup:all' : 'dup:', p.rest].filter(Boolean).join(' ');
+  runFind();
+});
+
 // после каждого перехода: путь в поле, история; запрос сбрасываем при смене папки
 function afterNav(changed) {
   if (changed) { Bz.sels = new Set(); Bz.selKeys = new Set(); Bz.anchorKey = null; }
@@ -577,6 +705,8 @@ const bKey = {
 };
 
 function renderBrowse() {
+  if (Fz.query && Fz.data?.dups) { renderDups(); return; }
+  $('#b-head [data-bsort="files"]').textContent = 'Файлов';
   $$('#b-head [data-bsort]').forEach((b) => {
     const on = b.dataset.bsort === Bz.sort.by;
     b.classList.toggle('sorted', on);
@@ -628,7 +758,7 @@ $$('#b-head [data-bsort]').forEach((b) => b.addEventListener('click', () => {
 async function openFile(it) {
   const s = curSource();
   const path = itemPath(it);
-  if (!s.peer) { call('open_path', { path }); return; }
+  if (!s.peer || it.full) { call('open_path', { path }); return; }
   toast(`Скачиваю ${it.name}…`, 60000);
   try { await invoke('peer_open', { peer: s.peer, path }); toast(`Открыт: ${it.name}`); } catch (e) { toast(String(e), 8000); }
 }
@@ -644,9 +774,9 @@ listen('download-progress', ({ payload: p }) => {
   if (p.size) toast(`Скачиваю ${baseName(p.path)}: ${Math.floor((p.done / p.size) * 100)}% из ${fmtSize(p.size)}`, 60000);
 });
 
-const itemPath = (it) => joinPath(it.place ? joinPath(Bz.data.path, it.place) : Bz.data.path, it.name);
-// ключ строки: имя (у найденного во вложенных — вместе с местом)
-const rowKey = (it) => (it.place ? it.place + '\u0000' : '') + it.name;
+const itemPath = (it) => it.full || joinPath(it.place ? joinPath(Bz.data.path, it.place) : Bz.data.path, it.name);
+// ключ строки: имя (у найденного во вложенных — вместе с местом; у дубликатов — полный путь)
+const rowKey = (it) => it.full || (it.place ? it.place + '\u0000' : '') + it.name;
 function rememberSel() {
   Bz.selKeys = new Set([...Bz.sels].map((i) => Bz.rows[i]).filter(Boolean).map(rowKey));
   Bz.anchorKey = Bz.rows[Bz.sel] ? rowKey(Bz.rows[Bz.sel]) : null;
@@ -684,12 +814,13 @@ const Pv = { seq: 0, cache: new Map() };
 function renderDetails() {
   const it = Bz.rows[Bz.sel];
   const box = $('#b-details');
-  const s = curSource();
+  // у найденных дубликатов свой источник: другой диск или S3
+  const s = it?.full ? Bz.sources.find((x) => !x.peer && x.seg === it.seg) || curSource() : curSource();
   // панель видна, только когда что-то выбрано
   $('.b-body').classList.toggle('with-details', !!(it && Bz.data && s));
   if (!it || !Bz.data || !s) { box.innerHTML = ''; return; }
   const path = itemPath(it);
-  const local = !Bz.data.remote;
+  const local = it.full ? !it.cloud : !Bz.data.remote;
   box.innerHTML = `
     <button class="d-close" data-dact="close" title="Закрыть (Esc)" aria-label="Закрыть">✕</button>
     <div class="d-preview" id="d-preview"><span class="ico big ${it.is_dir ? 'dir' : ''}">${it.is_dir ? ICON.folder : ICON.file}</span></div>
@@ -1245,7 +1376,7 @@ function selectedItems() {
   return idx.sort((a, b) => a - b).map((i) => Bz.rows[i]).filter(Boolean);
 }
 // место в задаче: путь + устройство
-const locOf = (it) => ({ peer: curSource()?.peer || null, path: itemPath(it) });
+const locOf = (it) => ({ peer: it.full ? null : curSource()?.peer || null, path: itemPath(it) });
 const hereLoc = () => (Bz.data ? { peer: curSource()?.peer || null, path: Bz.data.path } : null);
 
 // ---------- буфер: копировать / вырезать / вставить (между вкладками и компьютерами тоже) ----------
@@ -1278,9 +1409,12 @@ async function deleteSelected(forever) {
   if (!items.length) return;
   const s = curSource();
   const cloud = items.some((it) => itemPath(it).startsWith('s3://'));
-  const where = s.peer ? ` на компьютере «${s.peerName}»` : '';
+  const where = s.peer && !items[0].full ? ` на компьютере «${s.peerName}»` : '';
   const bytes = items.reduce((a, it) => a + (it.size || 0), 0);
-  const what = items.length === 1 ? `«${items[0].name}»` : `${items.length} объектов`;
+  // у дубликатов имена одинаковые — показываем, какие именно копии
+  const what = items[0].full
+    ? (items.length === 1 ? items[0].full : `${items.length} файлов:\n${items.slice(0, 6).map((it) => it.full).join('\n')}${items.length > 6 ? '\n…' : ''}`)
+    : items.length === 1 ? `«${items[0].name}»` : `${items.length} объектов`;
   // в S3 корзины нет — там удаление всегда навсегда
   if (forever || cloud) {
     const why = cloud && !forever ? '\n\nЭто объекты хранилища S3: корзины там нет, удаление будет безвозвратным.' : '';
@@ -1506,6 +1640,11 @@ listen('jobs', ({ payload }) => {
   const finished = TK.list.filter((j) => !ACTIVE.includes(j.state) && !tasksDone.has(j.id));
   if (finished.length) {
     finished.forEach((j) => tasksDone.add(j.id));
+    // в найденных дубликатах удалённое и перемещённое больше не показываем
+    const gone = new Set(finished.filter((j) => ['trash', 'delete', 'move'].includes(j.kind) && j.state !== 'cancelled' && j.state !== 'interrupted').flatMap((j) => (j.items || []).map((x) => x.path)));
+    if (gone.size && Dz.groups.length) {
+      Dz.groups = Dz.groups.map((g) => ({ ...g, files: g.files.filter((f) => !gone.has(f.full)) })).filter((g) => g.files.length > 1);
+    }
     if (Bz.data && !Bz.busy) { if (Bz.live) openLive(Bz.data.path, true); else openDir(Bz.dir, true); }
   }
 });

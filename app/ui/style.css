@@ -462,3 +462,12 @@ svg { display: block; width: 100%; height: 100%; }
 /* путь текстом (двойной щелчок по пути) */
 .omni.editing .crumbs { display: none; }
 .omni.editing #b-q { font-family: var(--mono, ui-monospace, Consolas, monospace); font-size: 12.5px; }
+
+/* дубликаты */
+.dup-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px 4px; margin-top: 4px; border-top: 1px solid var(--border); font-size: 13px; }
+.dup-head:first-child { border-top: none; margin-top: 0; }
+.dup-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.dup-head .dup-free { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 600; }
+.dup-head .dup-cloud { font-size: 11px; color: var(--muted); border: 1px solid var(--border-strong); border-radius: 4px; padding: 0 5px; }
+.brow.dup .name { padding-left: 4px; }
+#b-foot button { padding: 0 8px; font-size: 12px; margin-left: 6px; }
