@@ -299,13 +299,55 @@ function renderCrumbs() {
   $('#b-crumbs').scrollLeft = $('#b-crumbs').scrollWidth;
   $('#b-q').placeholder = 'поиск по имени';
 }
+let crumbTimer = null;
 $('#b-crumbs').addEventListener('click', (e) => {
   const b = e.target.closest('.crumb');
   if (!b) { $('#b-q').focus(); return; }
-  clearQuery();
-  if (b.dataset.path != null) openLive(b.dataset.path);
-  else openDir(b.dataset.idx === '' ? null : +b.dataset.idx);
+  // второй щелчок двойного — это редактирование пути, а не переход
+  clearTimeout(crumbTimer);
+  if (e.detail > 1) return;
+  crumbTimer = setTimeout(() => {
+    clearQuery();
+    if (b.dataset.path != null) openLive(b.dataset.path);
+    else openDir(b.dataset.idx === '' ? null : +b.dataset.idx);
+  }, 220);
 });
+// путь текущей папки текстом, как его пишет система: C:\Windows\System32, /Users/me, s3://bucket/dir
+function curPath() {
+  const s = curSource();
+  const parts = crumbParts();
+  if (!s || !parts.length) return '';
+  if (parts.length === 1) return s.root;
+  const sep = sepOf(s.root);
+  const root = parts[0].label;
+  return (root.endsWith(sep) ? root : root + sep) + parts.slice(1).map((p) => p.label).join(sep);
+}
+async function copyText(text, what) {
+  try { await window.__TAURI__.clipboardManager.writeText(text); } catch { try { await navigator.clipboard.writeText(text); } catch { return; } }
+  toast(`${what} скопирован: ${text}`);
+}
+// двойной щелчок по пути — путь становится обычным текстом (выделен): скопировать, поправить, вставить другой
+const Ed = { on: false, orig: '' };
+function editPath() {
+  const p = curPath();
+  if (!p) return;
+  Ed.on = true;
+  Ed.orig = p;
+  $('#omni').classList.add('editing');
+  const q = $('#b-q');
+  q.value = p;
+  q.focus();
+  q.select();
+}
+function endEdit() {
+  if (!Ed.on) return;
+  Ed.on = false;
+  $('#omni').classList.remove('editing');
+  if ($('#b-q').value.trim() === Ed.orig || looksLikePath($('#b-q').value.trim())) $('#b-q').value = '';
+}
+$('#b-crumbs').addEventListener('dblclick', (e) => { e.preventDefault(); editPath(); });
+$('#b-crumbs').title = 'Двойной щелчок — путь текстом: скопировать или ввести другой';
+
 // щелчок по свободному месту поля — фокус на ввод
 $('#omni').addEventListener('mousedown', (e) => {
   if (e.target.id === 'omni') { e.preventDefault(); $('#b-q').focus(); }
@@ -430,7 +472,7 @@ $('#omni-drop').addEventListener('mousedown', (e) => {
   if (s) pickSug(+s.dataset.i);
 });
 $('#b-q').addEventListener('focus', renderDrop);
-$('#b-q').addEventListener('blur', () => $('#omni-drop').classList.add('hidden'));
+$('#b-q').addEventListener('blur', () => { $('#omni-drop').classList.add('hidden'); endEdit(); });
 
 // ---------- поиск по имени в открытой папке и вложенных ----------
 const Fz = { query: '', data: null, timer: null, seq: 0 };
@@ -492,7 +534,12 @@ $('#b-q').addEventListener('keydown', async (e) => {
     $('#omni-drop').classList.add('hidden');
     if (looksLikePath(q)) { clearQuery(); $('#b-q').blur(); await goPath(q); }
     else { clearTimeout(Fz.timer); pushQuery(q); runFind(); }
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'с') && !$('#b-q').value) {
+    e.preventDefault();
+    const p = curPath();
+    if (p) copyText(p, 'Путь');
   } else if (e.key === 'Escape') {
+    if (Ed.on) { $('#b-q').value = ''; endEdit(); $('#b-q').blur(); return; }
     if (open) $('#omni-drop').classList.add('hidden');
     else if (q) { clearQuery(); renderBrowse(); }
     else $('#b-q').blur();

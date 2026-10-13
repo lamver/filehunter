@@ -458,3 +458,7 @@ svg { display: block; width: 100%; height: 100%; }
 .trow .c-btns button { padding: 1px 7px; font-size: 12px; min-width: 26px; }
 .trow .c-btns button.x:hover { color: var(--danger); border-color: var(--danger); }
 .tasks-list .t-errs { margin: 2px 0 4px 30px; font-size: 12px; color: var(--danger); }
+
+/* путь текстом (двойной щелчок по пути) */
+.omni.editing .crumbs { display: none; }
+.omni.editing #b-q { font-family: var(--mono, ui-monospace, Consolas, monospace); font-size: 12.5px; }
