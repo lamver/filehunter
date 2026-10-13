@@ -71,7 +71,12 @@ cargo build --release -p filehunter
 ```
 
 The app is built at `target/release/filehunter.exe` on Windows and `target/release/filehunter`
-on macOS. Installers are built by GitHub Actions (`.github/workflows/release.yml`) for each
+on macOS.
+
+To try changes next to an installed copy, run `dev.bat` (Windows) or `./dev.sh` (macOS).
+It builds the current code and starts it with its own data folder, tabs and network name,
+so both can run at the same time. On first run it copies the installed copy's index, so
+the disks are not scanned again. Installers are built by GitHub Actions (`.github/workflows/release.yml`) for each
 `v*` tag.
 
 Project layout:

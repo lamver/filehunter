@@ -2066,13 +2066,18 @@ fn main() {
         })
         .setup(|app| {
             tray(app)?;
-            // экземпляр со своей папкой данных (тестовая версия рядом с установленной) — видно по заголовку
-            if std::env::var_os("FILECAT_DATA_DIR").is_some() {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.set_title("FileHunter — тестовая версия");
-                }
-            }
             let st = app.state::<Shared>().inner().clone();
+            // Окно — из tauri.conf.json. Тестовая версия (своя папка данных, см. dev.bat) работает
+            // рядом с установленной: у неё свои вкладки и история (данные встроенного браузера)
+            // и заголовок, по которому их не перепутать.
+            {
+                let cfg = app.config().app.windows.first().cloned().ok_or("нет окна в tauri.conf.json")?;
+                let mut w = tauri::WebviewWindowBuilder::from_config(app.handle(), &cfg)?;
+                if std::env::var_os("FILECAT_DATA_DIR").is_some() {
+                    w = w.data_directory(st.data_dir.join("webview")).title("FileHunter — тестовая версия");
+                }
+                w.build()?;
+            }
             // связь с другими компьютерами — в фоне, окно не ждёт
             {
                 let (app, st) = (app.handle().clone(), st.clone());

@@ -13,6 +13,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "5"
 
+# dev.bat: свой код собирается быстро, зависимости оптимизируются один раз
+# (иначе хеширование и сжатие индекса в отладочной сборке в разы медленнее)
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
