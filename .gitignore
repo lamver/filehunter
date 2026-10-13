@@ -1,0 +1,6 @@
+/target
+/app/src-tauri/gen
+*.log
+/dist
+/.claude
+/docs/PLAN.md

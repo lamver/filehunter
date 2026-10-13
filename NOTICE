@@ -1,0 +1,24 @@
+FileHunter
+Every file on your disks, cloud storage and other computers, in one window.
+Copyright 2026 Valerij Frolov. Licensed under FSL-1.1-MIT, see LICENSE.md.
+
+FileHunter is built on open-source libraries. The main ones:
+
+  Tauri (app window)                          MIT / Apache-2.0
+  iroh (encrypted peer connections)           MIT / Apache-2.0
+  Apache OpenDAL (S3 storage)                 Apache-2.0
+  tokio, reqwest, rustls (networking)         MIT / Apache-2.0 / ISC
+  rayon (parallel disk scanning)              MIT / Apache-2.0
+  BLAKE3 (file hashes)                        CC0-1.0 / Apache-2.0
+  zstd (index compression)                    MIT / BSD-3-Clause
+  SQLite via rusqlite (hash cache)            Public Domain / MIT
+  notify (file change events)                 CC0-1.0 / MIT / Apache-2.0
+  serde, bincode (data formats)               MIT / Apache-2.0
+  trash (system Recycle Bin)                  MIT
+  keyring (macOS Keychain)                    MIT / Apache-2.0
+
+The full list of dependencies with versions is in Cargo.lock; license texts are
+available in the respective projects' repositories.
+
+Peer connections over the internet use public address-lookup and relay servers
+run by n0 (the iroh project). They see only device IDs and encrypted data.

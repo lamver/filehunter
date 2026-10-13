@@ -1,0 +1,17 @@
+[package]
+name = "filecat-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "filehunter-cli"
+path = "src/main.rs"
+
+[dependencies]
+filecat-core = { path = "../core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+dirs.workspace = true
+clap = { version = "4.5", features = ["derive"] }
