@@ -848,7 +848,7 @@ fn job_add(
     if items.is_empty() && urls.is_empty() {
         return Err("нечего делать".into());
     }
-    Ok(jobs_of(&st)?.add(jobs::Job { kind, items, dest, urls, ..Default::default() }))
+    Ok(jobs_of(&st)?.add_each(jobs::Job { kind, items, dest, urls, ..Default::default() }))
 }
 
 /// Проверка ссылок перед загрузкой (из буфера обмена): имя, размер, не страница ли.
@@ -865,6 +865,12 @@ async fn url_probe(urls: Vec<String>) -> CmdResult<Vec<jobs::Probe>> {
 #[tauri::command]
 fn job_cancel(st: State<Shared>, id: u64) -> CmdResult<()> {
     jobs_of(&st)?.cancel(id);
+    Ok(())
+}
+
+#[tauri::command]
+fn job_cancel_group(st: State<Shared>, group: u64) -> CmdResult<()> {
+    jobs_of(&st)?.cancel_group(group);
     Ok(())
 }
 
@@ -1834,6 +1840,7 @@ fn main() {
             url_probe,
             job_add,
             job_cancel,
+            job_cancel_group,
             job_pause,
             job_retry,
             jobs_clear,

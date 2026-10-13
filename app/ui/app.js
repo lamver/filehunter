@@ -99,6 +99,7 @@ const Pz = { info: { ready: false, peers: [] } };
 async function fetchSources() {
   const local = (await invoke('sources')).map((s) => ({ ...s, key: s.root }));
   try { Pz.info = await invoke('p2p_info'); } catch { Pz.info = { ready: false, peers: [] }; }
+  try { if (TK.open) renderTasks(); } catch { /* панель задач ещё не готова */ } // имена компьютеров в таблице задач
   const cache = peerCache();
   const remote = await Promise.all(Pz.info.peers.map(async (p) => {
     let list = null;
@@ -1289,6 +1290,97 @@ function tasksOpen(on) {
 }
 const fmtEta = (s) => (s < 60 ? `${Math.ceil(s)} с` : s < 3600 ? `${Math.round(s / 60)} мин` : `${(s / 3600).toFixed(1)} ч`);
 
+// таблица задач: строка на объект; действие над несколькими объектами — группа со сводной строкой
+TK.fold = new Set();   // свёрнутые группы
+TK.unfold = new Set(); // большие группы, которые развернули вручную
+const devName = (peer) => {
+  if (!peer || peer === Pz.info?.id) return '';
+  return Pz.info?.peers?.find((p) => p.id === peer)?.name || 'другой компьютер';
+};
+const withDev = (peer, path) => (devName(peer) ? `${devName(peer)} · ${path}` : path);
+const shortPath = (path) => {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 3) return path;
+  const sep = path.includes('\\') ? '\\' : '/';
+  return `${parts[0]}${sep}…${sep}${parts.slice(-2).join(sep)}`;
+};
+const withDevShort = (peer, path) => (devName(peer) ? `${devName(peer)} · ${shortPath(path)}` : shortPath(path));
+const parentDir = (p) => {
+  const t = p.replace(/[\\/]+$/, '');
+  const i = Math.max(t.lastIndexOf('\\'), t.lastIndexOf('/'));
+  return i > 0 ? t.slice(0, t[i - 1] === ':' ? i + 1 : i) : t;
+};
+const urlHost = (u) => { try { return new URL(u).host; } catch { return u; } };
+const pctOf = (j) => (j.state === 'done' ? 100 : j.bytes_total ? Math.min(100, (j.bytes_done / j.bytes_total) * 100) : j.files_total ? (j.files_done / j.files_total) * 100 : 0);
+
+function jobCells(j) {
+  const it = j.items && j.items[0];
+  const many = (j.items?.length || 0) + (j.urls?.length || 0) > 1;
+  const name = j.urls?.length ? (many ? `${j.urls.length} ссылок` : baseName(j.urls[0].split('?')[0]) || j.urls[0])
+    : it ? (many ? `${j.items.length} объектов` : baseName(it.path)) : j.title;
+  const from = j.urls?.length ? urlHost(j.urls[0]) : it ? withDevShort(it.peer, parentDir(it.path)) : '';
+  const to = j.kind === 'trash' ? 'Корзина' : j.kind === 'delete' ? 'удаление навсегда' : j.dest ? withDevShort(j.dest.peer, j.dest.path) : '';
+  const full = (j.urls?.length ? j.urls[0] : it ? withDev(it.peer, it.path) : j.title) + (j.dest ? `\n→ ${withDev(j.dest.peer, j.dest.path)}` : '');
+  return { name, from, to, full };
+}
+
+function progressCell(pct, sub, cls = '') {
+  return `<span class="c-prog"><span class="bar ${cls}"><i style="width:${pct.toFixed(1)}%"></i></span><span class="pct">${Math.floor(pct)}%</span>${sub ? `<small class="muted">${sub}</small>` : ''}</span>`;
+}
+
+function jobRow(j, inGroup) {
+  const c = jobCells(j);
+  const running = j.state === 'running';
+  const sub = j.bytes_total ? `${fmtSize(j.bytes_done)} из ${fmtSize(j.bytes_total)}` : j.files_total > 1 ? `${fmtNum(j.files_done)} из ${fmtNum(j.files_total)}` : '';
+  const eta = running && j.speed > 0 && j.bytes_total > j.bytes_done ? fmtEta((j.bytes_total - j.bytes_done) / j.speed) : '';
+  const btns = [
+    running && `<button data-jact="pause" data-id="${j.id}" title="Пауза">❚❚</button>`,
+    j.state === 'paused' && `<button data-jact="resume" data-id="${j.id}" title="Продолжить">▶</button>`,
+    ACTIVE.includes(j.state) && `<button data-jact="cancel" data-id="${j.id}" class="x" title="Остановить эту задачу">✕</button>`,
+    ['failed', 'cancelled', 'interrupted'].includes(j.state) && `<button data-jact="retry" data-id="${j.id}" title="Повторить">↻</button>`,
+    j.dest && !j.dest.peer && !j.dest.path.startsWith('s3://') && j.state === 'done' && `<button data-jact="open" data-id="${j.id}" title="Открыть папку назначения">📂</button>`,
+  ].filter(Boolean).join('');
+  const err = j.error || (j.errors?.length ? j.errors[0] : '');
+  return `<div class="trow ${j.state}${inGroup ? ' sub' : ''}" title="${esc(c.full + (j.current && ACTIVE.includes(j.state) ? `\nсейчас: ${j.current}` : '') + (err ? `\n${err}` : ''))}">
+    <span class="c-fold"></span>
+    <span class="c-what"><small class="kind">${KIND[j.kind] || j.kind}</small>${esc(c.name)}</span>
+    <span class="c-path">${esc(c.from)}</span>
+    <span class="c-path">${esc(c.to)}</span>
+    ${progressCell(pctOf(j), sub, j.state)}
+    <span class="c-num">${running && j.speed ? `${fmtSize(j.speed)}/с` : ''}</span>
+    <span class="c-num">${eta}</span>
+    <span class="c-state">${STATE[j.state] || j.state}${err ? ` <span class="t-err">${esc(err)}</span>` : ''}</span>
+    <span class="c-btns">${btns}</span>
+  </div>${j.errors && j.errors.length > 1 ? `<details class="t-errs"><summary>Ошибки (${j.errors.length})</summary>${j.errors.slice(0, 50).map((e) => `<div>${esc(e)}</div>`).join('')}</details>` : ''}`;
+}
+
+function groupRow(g, list, folded) {
+  const n = list.length;
+  const act = list.filter((j) => ACTIVE.includes(j.state));
+  const done = list.filter((j) => j.state === 'done').length;
+  const bad = list.filter((j) => ['failed', 'cancelled', 'interrupted'].includes(j.state)).length;
+  const pct = list.reduce((a, j) => a + pctOf(j), 0) / n;
+  const speed = list.reduce((a, j) => a + (j.state === 'running' ? j.speed || 0 : 0), 0);
+  const known = list.every((j) => j.bytes_total || j.state === 'done');
+  const left = list.reduce((a, j) => a + (j.state === 'done' ? 0 : Math.max(0, j.bytes_total - j.bytes_done)), 0);
+  const eta = act.length && speed > 0 && known ? fmtEta(left / speed) : '';
+  const state = act.length ? (list.some((j) => j.state === 'running') ? 'running' : list.some((j) => j.state === 'paused') ? 'paused' : 'queued') : bad ? 'failed' : 'done';
+  const j0 = list[0], c = jobCells({ ...j0, items: list.flatMap((j) => j.items || []), urls: list.flatMap((j) => j.urls || []) });
+  const from = new Set(list.map((j) => jobCells(j).from)).size === 1 ? c.from : 'разные папки';
+  const btns = act.length ? `<button data-jact="cancel-group" data-id="${g}" class="x" title="Остановить все задачи группы">✕ все</button>` : '';
+  return `<div class="trow group ${state}" data-group="${g}">
+    <span class="c-fold">${folded ? '▸' : '▾'}</span>
+    <span class="c-what"><small class="kind">${KIND[j0.kind] || j0.kind}</small>${esc(c.name)}</span>
+    <span class="c-path">${esc(from)}</span>
+    <span class="c-path">${esc(c.to)}</span>
+    ${progressCell(pct, `${done} из ${n} готово`, state)}
+    <span class="c-num">${speed ? `${fmtSize(speed)}/с` : ''}</span>
+    <span class="c-num">${eta}</span>
+    <span class="c-state">${act.length ? `${STATE[state]}` : bad ? `не удалось: ${bad}` : STATE.done}</span>
+    <span class="c-btns">${btns}</span>
+  </div>`;
+}
+
 function renderTasks() {
   const panel = $('#tasks');
   panel.classList.toggle('collapsed', !TK.open);
@@ -1299,27 +1391,24 @@ function renderTasks() {
   $('#st-tasks').classList.toggle('busy', !!active);
   $('#st-tasks').classList.toggle('on', TK.open);
   if (!TK.open) return;
-  const list = TK.list.slice().reverse();
-  $('#tasks-list').innerHTML = list.length ? list.map((j) => {
-    const pct = j.bytes_total ? Math.min(100, (j.bytes_done / j.bytes_total) * 100) : j.files_total ? (j.files_done / j.files_total) * 100 : 0;
-    const eta = j.state === 'running' && j.speed > 0 && j.bytes_total > j.bytes_done ? ` · осталось ~${fmtEta((j.bytes_total - j.bytes_done) / j.speed)}` : '';
-    const nums = j.bytes_total ? `${fmtSize(j.bytes_done)} из ${fmtSize(j.bytes_total)}` : j.files_total ? `${fmtNum(j.files_done)} из ${fmtNum(j.files_total)}` : '';
-    const speed = j.state === 'running' && j.speed ? ` · ${fmtSize(j.speed)}/с` : '';
-    const btns = [
-      j.state === 'running' && `<button data-jact="pause" data-id="${j.id}">Пауза</button>`,
-      j.state === 'paused' && `<button data-jact="resume" data-id="${j.id}">Продолжить</button>`,
-      ACTIVE.includes(j.state) && `<button data-jact="cancel" data-id="${j.id}">Отмена</button>`,
-      ['failed', 'cancelled', 'interrupted'].includes(j.state) && `<button data-jact="retry" data-id="${j.id}">Повторить</button>`,
-      j.dest && !j.dest.peer && !j.dest.path.startsWith('s3://') && ['done', 'failed'].includes(j.state) && `<button data-jact="open" data-id="${j.id}">Открыть папку</button>`,
-    ].filter(Boolean).join('');
-    return `<div class="task ${j.state}">
-      <div class="t-top"><span class="t-title" title="${esc(j.title)}">${esc(j.title)}</span>
-        <span class="t-state">${STATE[j.state] || j.state}</span><span class="t-btns">${btns}</span></div>
-      ${ACTIVE.includes(j.state) || j.state === 'done' ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}
-      <div class="t-info muted">${nums}${speed}${eta}${j.current && ACTIVE.includes(j.state) ? ` · ${esc(baseName(j.current))}` : ''}${j.error ? ` · <span class="t-err">${esc(j.error)}</span>` : ''}</div>
-      ${j.errors && j.errors.length ? `<details class="t-errs"><summary>Ошибки (${j.errors.length})</summary>${j.errors.slice(0, 50).map((e) => `<div>${esc(e)}</div>`).join('')}</details>` : ''}
-    </div>`;
-  }).join('') : '<p class="muted t-empty">Здесь будут задачи: удаление, копирование, перемещение и загрузка. Выделите файлы и нажмите Ctrl+C, затем откройте папку и Ctrl+V; Delete — в корзину, Shift+Delete — навсегда.</p>';
+  // новые сверху; задачи одной группы — вместе, под сводной строкой
+  const blocks = [], groups = new Map();
+  for (const j of TK.list.slice().reverse()) {
+    if (!j.group) { blocks.push({ job: j }); continue; }
+    if (!groups.has(j.group)) { const b = { group: j.group, list: [] }; groups.set(j.group, b); blocks.push(b); }
+    groups.get(j.group).list.push(j);
+  }
+  const html = blocks.map((b) => {
+    if (b.job) return jobRow(b.job, false);
+    const list = b.list.slice().reverse(); // внутри группы — по порядку
+    if (list.length === 1) return jobRow(list[0], false);
+    // большие группы свёрнуты, пока их не раскроют
+    const folded = TK.fold.has(b.group) || (list.length > 30 && !TK.unfold.has(b.group));
+    return groupRow(b.group, list, folded) + (folded ? '' : list.map((j) => jobRow(j, true)).join(''));
+  }).join('');
+  $('#tasks-list').innerHTML = TK.list.length
+    ? `<div class="thead"><span></span><span>Что</span><span>Откуда</span><span>Куда</span><span>Выполнено</span><span>Скорость</span><span>Осталось</span><span>Состояние</span><span></span></div>${html}`
+    : '<p class="muted t-empty">Здесь будут задачи: удаление, копирование, перемещение и загрузка. Выделите файлы и нажмите Ctrl+C, затем откройте папку и Ctrl+V; Delete — в корзину, Shift+Delete — навсегда.</p>';
 }
 $('#tasks-clear').addEventListener('click', () => invoke('jobs_clear'));
 $('#tasks-hide').addEventListener('click', () => tasksOpen(false));
@@ -1329,7 +1418,17 @@ function jobAdded() {
 }
 $('#tasks-list').addEventListener('click', (e) => {
   const b = e.target.closest('[data-jact]');
-  if (!b) return;
+  if (!b) {
+    // клик по сводной строке группы — свернуть или развернуть
+    const g = e.target.closest('.trow.group');
+    if (!g) return;
+    const id = +g.dataset.group;
+    const folded = g.querySelector('.c-fold').textContent === '▸';
+    if (folded) { TK.fold.delete(id); TK.unfold.add(id); } else { TK.fold.add(id); TK.unfold.delete(id); }
+    renderTasks();
+    return;
+  }
+  if (b.dataset.jact === 'cancel-group') { invoke('job_cancel_group', { group: +b.dataset.id }); return; }
   const id = +b.dataset.id;
   const j = TK.list.find((x) => x.id === id);
   if (b.dataset.jact === 'pause') invoke('job_pause', { id, pause: true });

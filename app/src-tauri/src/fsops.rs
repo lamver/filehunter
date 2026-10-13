@@ -116,6 +116,20 @@ pub fn mkdir(st: &AppState, path: &str) -> Result<(), String> {
     std::fs::create_dir_all(path).map_err(|e| format!("{path}: {e}"))
 }
 
+/// Мгновенное перемещение в пределах одного диска. Ошибка — если диски разные
+/// (тогда задача копирует файлы и удаляет исходники).
+pub fn rename(from: &str, to: &str) -> Result<(), String> {
+    guard(from)?;
+    guard(to)?;
+    if is_s3(from) || is_s3(to) {
+        return Err("в S3 переименования нет".into());
+    }
+    if Path::new(to).exists() {
+        return Err(format!("{to}: уже существует"));
+    }
+    std::fs::rename(from, to).map_err(|e| format!("{from}: {e}"))
+}
+
 /// Удаление: в корзину или навсегда. В S3 корзины нет — всегда навсегда.
 pub fn delete(st: &AppState, path: &str, forever: bool) -> Result<(), String> {
     guard(path)?;

@@ -23,7 +23,7 @@ use tauri::{AppHandle, Emitter, Manager};
 const ALPN: &[u8] = b"filecat/1";
 /// Версия протокола: растёт, когда появляются новые запросы.
 /// 2 — операции с файлами (копирование, перемещение, удаление по сети).
-pub const PROTO: u32 = 2;
+pub const PROTO: u32 = 3;
 /// Больше этого JSON-сообщение быть не может — защита от мусора.
 const MAX_MSG: u32 = 64 << 20;
 /// Кусок файла за один запрос при скачивании.
@@ -200,7 +200,7 @@ impl P2p {
         self.proto.lock().unwrap().get(id).is_some_and(|v| *v < PROTO)
     }
 
-    fn peer_name(&self, id: &str) -> String {
+    pub fn peer_name(&self, id: &str) -> String {
         self.peers.lock().unwrap().iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_else(|| "другой компьютер".into())
     }
 
@@ -531,6 +531,10 @@ async fn serve(app: &AppHandle, share: &Share, method: &str, a: Value, data: Vec
         "locate" | "fs_tree" | "fs_read" | "fs_exists" | "read" => need_path("path", false)?,
         "fs_mkdir" | "fs_delete" | "fs_write" | "fs_write_done" | "fs_write_abort" => need_path("path", true)?,
         "source_rename" | "source_remove" => need_path("root", true)?,
+        "fs_rename" => {
+            need_path("from", true)?;
+            need_path("to", true)?;
+        }
         "trash" => {
             let files: Vec<Value> = arg(&a, "files")?;
             if !share.can_write() || !files.iter().all(|f| f["path"].as_str().is_some_and(|p| share.allows(p))) {
@@ -565,6 +569,10 @@ async fn serve(app: &AppHandle, share: &Share, method: &str, a: Value, data: Vec
         "fs_delete" => {
             let (path, forever): (String, bool) = (arg(&a, "path")?, arg(&a, "forever")?);
             fs(Box::new(move |st| val(fsops::delete(st, &path, forever)?))).await
+        }
+        "fs_rename" => {
+            let (from, to): (String, String) = (arg(&a, "from")?, arg(&a, "to")?);
+            fs(Box::new(move |_| val(fsops::rename(&from, &to)?))).await
         }
         "fs_write" => {
             let (path, offset): (String, u64) = (arg(&a, "path")?, arg(&a, "offset")?);

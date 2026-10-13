@@ -53,6 +53,12 @@ pub struct Job {
     /// Байт/с за последние секунды.
     #[serde(default)]
     pub speed: f64,
+    /// Действие над несколькими объектами — по задаче на объект, общий номер группы
+    /// (номер первой задачи) и общее название. 0 — задача сама по себе.
+    #[serde(default)]
+    pub group: u64,
+    #[serde(default)]
+    pub group_title: String,
 }
 
 struct Ctl {
@@ -70,7 +76,7 @@ pub struct Jobs {
     emitted: Mutex<Instant>,
 }
 
-const KEEP: usize = 200;
+const KEEP: usize = 2000;
 
 impl Jobs {
     pub fn start(app: AppHandle, st: &AppState) -> Arc<Self> {
@@ -124,6 +130,46 @@ impl Jobs {
         }
     }
 
+    /// Несколько объектов — по задаче на каждый: каждую видно отдельной строкой
+    /// и каждую можно остановить. Возвращает номер первой.
+    pub fn add_each(&self, job: Job) -> u64 {
+        let parts: Vec<Job> = if job.items.len() > 1 {
+            job.items.iter().map(|it| Job { items: vec![it.clone()], urls: vec![], ..job.clone() }).collect()
+        } else if job.urls.len() > 1 {
+            job.urls.iter().map(|u| Job { urls: vec![u.clone()], items: vec![], ..job.clone() }).collect()
+        } else {
+            return self.add(job);
+        };
+        let group_title = title_of(&job);
+        let mut first = 0;
+        for mut p in parts {
+            p.group = first;
+            p.group_title = group_title.clone();
+            let id = self.add(p);
+            if first == 0 {
+                first = id;
+                self.update(id, |j| j.group = id);
+            }
+        }
+        self.emit(true);
+        first
+    }
+
+    /// Остановить все задачи группы (ещё не начатые — убрать из очереди).
+    pub fn cancel_group(&self, group: u64) {
+        let ids: Vec<u64> = self
+            .list
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|j| j.group == group && matches!(j.state.as_str(), "queued" | "running" | "paused"))
+            .map(|j| j.id)
+            .collect();
+        for id in ids {
+            self.cancel(id);
+        }
+    }
+
     pub fn add(&self, mut job: Job) -> u64 {
         job.id = self.next.fetch_add(1, Ordering::Relaxed);
         job.state = "queued".into();
@@ -168,7 +214,7 @@ impl Jobs {
     /// Повтор: та же задача заново, отдельной строкой в истории.
     pub fn retry(&self, id: u64) -> Option<u64> {
         let j = self.list.lock().unwrap().iter().find(|j| j.id == id).cloned()?;
-        Some(self.add(Job { kind: j.kind, title: j.title, items: j.items, dest: j.dest, urls: j.urls, ..Default::default() }))
+        Some(self.add(Job { kind: j.kind, title: j.title, items: j.items, dest: j.dest, urls: j.urls, group: j.group, group_title: j.group_title, ..Default::default() }))
     }
 
     pub fn clear_finished(&self) {
@@ -419,6 +465,13 @@ impl Side {
         }
     }
 
+    fn rename(&self, from: &str, to: &str) -> Result<(), String> {
+        match self {
+            Side::Here(_) => fsops::rename(from, to),
+            Side::Peer(..) => self.call("fs_rename", json!({ "from": from, "to": to }), vec![]).map(|_| ()),
+        }
+    }
+
     fn delete(&self, path: &str, forever: bool) -> Result<(), String> {
         match self {
             Side::Here(st) => fsops::delete(st, path, forever),
@@ -498,6 +551,17 @@ impl Sink {
             }
         }
     }
+}
+
+/// Оба пути на одном диске: одна буква диска в Windows; на macOS/Linux проверит сама система.
+fn same_volume(a: &str, b: &str) -> bool {
+    if fsops::is_s3(a) || fsops::is_s3(b) {
+        return false;
+    }
+    if a.starts_with('/') && b.starts_with('/') {
+        return true;
+    }
+    a.get(..2).map(|d| d.to_lowercase()) == b.get(..2).map(|d| d.to_lowercase())
 }
 
 // ---------- выполнение одной задачи ----------
@@ -620,14 +684,25 @@ impl Run<'_> {
             if mv {
                 self.touch(&it.peer, &it.path);
             }
-            // перемещение в пределах одного диска этого компьютера — мгновенное переименование
-            if mv && matches!((&src, &dst), (Side::Here(_), Side::Here(_))) && !fsops::is_s3(&it.path) && !fsops::is_s3(&dest.path)
-                && it.path.get(..2).map(|d| d.to_lowercase()) == dest.path.get(..2).map(|d| d.to_lowercase())
-                && std::fs::rename(&it.path, &target).is_ok()
-            {
-                renamed[k] = true;
-                self.file_done(None);
-                continue;
+            // перемещение в пределах одного диска — мгновенное переименование там, где лежат
+            // файлы (на этом компьютере или на другом), без передачи содержимого по сети
+            if mv && src.same(&dst) && same_volume(&it.path, &dest.path) {
+                match src.rename(&it.path, &target) {
+                    Ok(()) => {
+                        renamed[k] = true;
+                        self.file_done(None);
+                        continue;
+                    }
+                    // старая версия на другом компьютере не умеет переименовывать: иначе всё
+                    // содержимое пошло бы через этот компьютер туда и обратно
+                    Err(e) if e.contains("неизвестный запрос") => {
+                        let name = self.st.p2p.get().map(|p| p.peer_name(it.peer.as_deref().unwrap_or_default())).unwrap_or_default();
+                        return Err(format!(
+                            "На компьютере «{name}» старая версия FileHunter: перемещение внутри него пошло бы через этот компьютер по сети. Обновите FileHunter там — и перемещение будет мгновенным"
+                        ));
+                    }
+                    Err(_) => {} // разные диски или имя занято — копируем
+                }
             }
             let tree = src.tree(&it.path)?;
             for t in tree {

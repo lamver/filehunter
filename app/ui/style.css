@@ -426,3 +426,35 @@ svg { display: block; width: 100%; height: 100%; }
 .about .upd { display: flex; gap: 10px; align-items: center; margin: 4px 0 12px; }
 .about .upd-notes { white-space: pre-wrap; font: inherit; font-size: 13px; background: var(--panel, rgba(127,127,127,.08)); padding: 8px 10px; border-radius: 6px; max-height: 240px; overflow: auto; }
 .tab.has-update::after { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-left: 6px; vertical-align: middle; }
+
+/* таблица задач */
+.tasks-grip { top: -4px; height: 9px; }
+.tasks-grip::after { content: ''; position: absolute; left: 50%; top: 3px; width: 44px; height: 3px; margin-left: -22px; border-radius: 2px; background: var(--border-strong); transition: background .15s; }
+.tasks-grip:hover::after, .tasks-grip:active::after { background: var(--accent); }
+.tasks-grip:hover { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.tasks-list { padding: 0 8px 8px; }
+.thead, .trow { display: grid; grid-template-columns: 16px minmax(160px, 2.2fr) minmax(90px, 1.3fr) minmax(90px, 1.3fr) minmax(130px, 1.2fr) 78px 62px minmax(80px, .9fr) 92px; gap: 10px; align-items: center; }
+.thead { position: sticky; top: 0; z-index: 1; background: var(--surface); font-size: 11px; color: var(--muted); padding: 4px 4px; border-bottom: 1px solid var(--border); }
+.trow { padding: 4px 4px; border-bottom: 1px solid var(--border); font-size: 12.5px; min-height: 30px; }
+.trow > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trow.sub .c-what { padding-left: 14px; }
+.trow.group { cursor: pointer; font-weight: 500; background: color-mix(in srgb, var(--text) 3%, transparent); }
+.trow.group:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.trow .c-fold { color: var(--muted); font-size: 11px; }
+.trow .kind { color: var(--muted); margin-right: 6px; font-size: 11px; }
+.trow .c-path { color: var(--muted); direction: ltr; }
+.trow .c-num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.trow .c-prog { display: grid; grid-template-columns: 1fr 34px; grid-template-rows: auto auto; column-gap: 6px; align-items: center; }
+.trow .c-prog .bar { max-width: none; margin: 0; height: 5px; }
+.trow .c-prog .pct { text-align: right; font-variant-numeric: tabular-nums; font-size: 12px; }
+.trow .c-prog small { grid-column: 1 / -1; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trow .bar.done i { background: var(--success); }
+.trow .bar.failed i, .trow .bar.cancelled i, .trow .bar.interrupted i { background: var(--danger); opacity: .6; }
+.trow .c-state { font-size: 12px; color: var(--muted); }
+.trow.running .c-state { color: var(--accent); }
+.trow.done .c-state { color: var(--success); }
+.trow.failed .c-state, .trow .t-err { color: var(--danger); }
+.trow .c-btns { display: flex; gap: 4px; justify-content: flex-end; }
+.trow .c-btns button { padding: 1px 7px; font-size: 12px; min-width: 26px; }
+.trow .c-btns button.x:hover { color: var(--danger); border-color: var(--danger); }
+.tasks-list .t-errs { margin: 2px 0 4px 30px; font-size: 12px; color: var(--danger); }
