@@ -1,6 +1,7 @@
 //! Ядро FileHunter (filecat-core): индекс файлов, сканеры, поиск и дубликаты.
 
 pub mod dupes;
+pub mod dupfind;
 pub mod index;
 pub mod scan;
 pub mod remote;

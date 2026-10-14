@@ -8,7 +8,8 @@ mod p2p;
 mod update;
 mod watch;
 
-use filecat_core::dupes::{find_duplicates_in, find_duplicates_live, DupeGroup, DupeOptions, DupeReport, ETag};
+use filecat_core::dupes::{find_duplicates_live, DupeGroup, DupeOptions, DupeReport};
+use filecat_core::dupfind::ETag;
 use filecat_core::scan::{scan_walk, ScanOptions};
 use filecat_core::search::{search, search_in, Query, SortBy};
 use filecat_core::remote::{local_list_dir, s3_check, s3_list_dir, scan_s3_etags, CheckError, LiveEntry, S3Config};
@@ -1344,7 +1345,7 @@ pub(crate) fn run_scan(app: &AppHandle, st: &Arc<AppState>, roots: Vec<String>, 
                 Some(c) => match creds::get(&c.name) {
                     Some(secret) => scan_s3_etags(c, &secret, &st.cancel, &emit).map(|(seg, tags)| {
                         // ETag объектов — для поиска копий без скачивания
-                        if let Err(e) = filecat_core::dupes::save_etags(&etags_path(st, &root), seg.info.scanned_at, &tags) {
+                        if let Err(e) = filecat_core::dupfind::save_etags(&etags_path(st, &root), seg.info.scanned_at, &tags) {
                             eprintln!("etags {root}: {e:#}");
                         }
                         st.etags.lock().unwrap().remove(&root);
@@ -1546,9 +1547,73 @@ fn etags_of(st: &AppState, root: &str, scanned_at: i64) -> Option<Arc<HashMap<u3
             return Some(m.clone());
         }
     }
-    let m = Arc::new(filecat_core::dupes::load_etags(&etags_path(st, root), scanned_at)?);
+    let m = Arc::new(filecat_core::dupfind::load_etags(&etags_path(st, root), scanned_at)?);
     st.etags.lock().unwrap().insert(root.to_string(), (scanned_at, m.clone()));
     Some(m)
+}
+
+#[derive(Serialize)]
+struct SizeGroupDto {
+    id: String,
+    size: u64,
+    is_dir: bool,
+    files_inside: u32,
+    files: Vec<DupFileDto>,
+}
+
+#[derive(Serialize)]
+struct SizeReportDto {
+    groups: Vec<SizeGroupDto>,
+    /// Групп всего (показаны первые).
+    total: usize,
+    dir_groups: usize,
+    file_groups: usize,
+    potential: u64,
+    ms: f64,
+}
+
+/// dup:size — группы одинакового размера на всех источниках, прямо из индекса:
+/// копии папок (верхний уровень) и файлы от `min_size`. Без чтения диска.
+#[tauri::command]
+fn dup_sizes(st: State<Shared>, query: String, min_size: u64) -> CmdResult<SizeReportDto> {
+    const SHOW: usize = 3000;
+    let t = Instant::now();
+    let q = if query.trim().is_empty() { None } else { Some(Query::parse(&query).map_err(err)?) };
+    let names: HashMap<String, String> = crate::sources(st.clone()).into_iter().map(|s| (s.root.to_lowercase(), s.title)).collect();
+    let idx = st.index.read().unwrap();
+    let rep = filecat_core::dupfind::by_size(&idx, min_size, &|r| {
+        q.as_ref().is_none_or(|q| {
+            let seg = &idx.segments[r.seg as usize];
+            // у папок фильтры по имени и ext: смысла не имеют — к ним применяем только size:
+            seg.entries[r.idx as usize].is_dir() || q.matches_at(seg, r.idx)
+        })
+    });
+    let dto = |r: FileRef| {
+        let s = &idx.segments[r.seg as usize];
+        let full = s.path(r.idx).to_string_lossy().into_owned();
+        DupFileDto {
+            seg: r.seg,
+            idx: r.idx,
+            name: s.name(r.idx).to_string(),
+            place: s.parent_path(r.idx).to_string_lossy().into_owned(),
+            source: names.get(&s.info.root.to_lowercase()).cloned().unwrap_or_else(|| s.info.root.clone()),
+            mtime: s.entries[r.idx as usize].mtime,
+            cloud: s.is_remote(),
+            full,
+        }
+    };
+    let total = rep.groups.len();
+    let groups = rep
+        .groups
+        .iter()
+        .take(SHOW)
+        .map(|g| {
+            let files: Vec<DupFileDto> = g.members.iter().map(|r| dto(*r)).filter(|f| f.cloud || !is_protected(Path::new(&f.full))).collect();
+            SizeGroupDto { id: format!("{}:{}:{}:{}", if g.is_dir { "d" } else { "f" }, g.size, g.files_inside, g.members[0].idx), size: g.size, is_dir: g.is_dir, files_inside: g.files_inside, files }
+        })
+        .filter(|g| g.files.len() > 1)
+        .collect();
+    Ok(SizeReportDto { groups, total, dir_groups: rep.dir_groups, file_groups: rep.file_groups, potential: rep.potential, ms: t.elapsed().as_secs_f64() * 1000.0 })
 }
 
 #[derive(Deserialize)]
@@ -1576,15 +1641,28 @@ struct DupFileDto {
 struct DupGroupDto {
     id: String,
     size: u64,
+    /// false — совпало по выборке, полная проверка ещё идёт.
+    exact: bool,
     files: Vec<DupFileDto>,
 }
 
 /// Ищет копии в выбранных папках (`all` — на всех дисках и в S3 этого компьютера),
-/// среди файлов, подходящих под `query` (ext:, size:, имя). Найденные группы приходят
-/// событиями «dup-groups» сразу по мере проверки, ход — «dup-progress», конец — «dup-done».
-/// Новый поиск останавливает предыдущий. `id` — номер поиска, он приходит в событиях.
+/// среди файлов от `min_size`, подходящих под `query` (ext:, size:, имя).
+/// События: «dup-plan» (сколько кандидатов), «dup-groups» (найденное: группы и снятые),
+/// «dup-progress», «dup-done». Новый поиск останавливает предыдущий. `id` — номер поиска.
 #[tauri::command]
-fn dup_search(app: AppHandle, st: State<Shared>, id: u64, scopes: Vec<DupScope>, all: bool, query: String, gentle: bool) -> CmdResult<u64> {
+#[allow(clippy::too_many_arguments)]
+fn dup_search(
+    app: AppHandle,
+    st: State<Shared>,
+    id: u64,
+    scopes: Vec<DupScope>,
+    all: bool,
+    query: String,
+    min_size: u64,
+    gentle: bool,
+) -> CmdResult<()> {
+    use filecat_core::dupfind::{plan, run, Found, RunOptions};
     let q = if query.trim().is_empty() { None } else { Some(Query::parse(&query).map_err(err)?) };
     let stop = Arc::new(AtomicBool::new(false));
     if let Some(old) = st.dup_run.lock().unwrap().replace(stop.clone()) {
@@ -1592,99 +1670,98 @@ fn dup_search(app: AppHandle, st: State<Shared>, id: u64, scopes: Vec<DupScope>,
     }
     let st = st.inner().clone();
     std::thread::spawn(move || {
-        let opts = DupeOptions {
-            min_size: 1,
-            threads: 2,
-            background: gentle,
-            max_bytes_per_sec: if gentle { 50 << 20 } else { 0 },
-            cache_path: Some(st.data_dir.join("hashes.db")),
-            only_sizes: None,
-            include_system: false,
-        };
         // названия источников — до блокировки индекса: sources() берёт её сама
         let names: HashMap<String, String> =
             crate::sources(app.state::<Shared>()).into_iter().map(|s| (s.root.to_lowercase(), s.title)).collect();
-        let idx = st.index.read().unwrap();
-        let titles: HashMap<u16, String> = idx
-            .segments
-            .iter()
-            .enumerate()
-            .filter_map(|(i, g)| names.get(&g.info.root.to_lowercase()).map(|t| (i as u16, t.clone())))
-            .collect();
-        let tags: HashMap<u16, Arc<HashMap<u32, ETag>>> = idx
-            .segments
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| s.is_remote())
-            .filter_map(|(i, s)| etags_of(&st, &s.info.root, s.info.scanned_at).map(|m| (i as u16, m)))
-            .collect();
-        // внутри ли папки `dir` запись `i` сегмента
-        let inside = |seg: &filecat_core::index::Segment, mut i: u32, dir: u32| loop {
-            let p = seg.entries[i as usize].parent;
-            if p == dir {
-                return true;
-            }
-            if p == filecat_core::index::NO_PARENT {
-                return false;
-            }
-            i = p;
-        };
-        let select = |r: filecat_core::index::FileRef| {
-            let seg = &idx.segments[r.seg as usize];
-            let in_scope = all || scopes.iter().any(|s| s.seg == r.seg && s.dir.is_none_or(|d| inside(seg, r.idx, d)));
-            in_scope && q.as_ref().is_none_or(|q| q.matches_at(seg, r.idx))
-        };
-        let etag = |r: filecat_core::index::FileRef| tags.get(&r.seg).and_then(|m| m.get(&r.idx).copied());
-        // найденное копим и отдаём пачками — групп бывают тысячи
-        let pending: Mutex<(Vec<DupGroupDto>, Instant)> = Mutex::new((Vec::new(), Instant::now()));
-        let dto = |g: &DupeGroup| DupGroupDto {
-            id: format!("{}:{}", g.size, blake3::Hash::from(g.hash).to_hex()),
-            size: g.size,
-            files: g
-                .files
+        // индекс нужен только на выбор кандидатов — дальше поиск работает со своим списком
+        let (pl, titles) = {
+            let idx = st.index.read().unwrap();
+            let titles: HashMap<u16, String> = idx
+                .segments
                 .iter()
-                .map(|&r| {
-                    let s = &idx.segments[r.seg as usize];
-                    DupFileDto {
-                        seg: r.seg,
-                        idx: r.idx,
-                        full: s.path(r.idx).to_string_lossy().into_owned(),
-                        name: s.name(r.idx).to_string(),
-                        place: s.parent_path(r.idx).to_string_lossy().into_owned(),
-                        source: titles.get(&r.seg).cloned().unwrap_or_else(|| s.info.root.clone()),
-                        mtime: s.entries[r.idx as usize].mtime,
-                        cloud: s.is_remote(),
-                    }
-                })
-                .collect(),
+                .enumerate()
+                .map(|(i, g)| (i as u16, names.get(&g.info.root.to_lowercase()).cloned().unwrap_or_else(|| g.info.root.clone())))
+                .collect();
+            let tags: HashMap<u16, Arc<HashMap<u32, ETag>>> = idx
+                .segments
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.is_remote())
+                .filter_map(|(i, s)| etags_of(&st, &s.info.root, s.info.scanned_at).map(|m| (i as u16, m)))
+                .collect();
+            let inside = |seg: &filecat_core::index::Segment, mut i: u32, dir: u32| loop {
+                let p = seg.entries[i as usize].parent;
+                if p == dir {
+                    return true;
+                }
+                if p == filecat_core::index::NO_PARENT {
+                    return false;
+                }
+                i = p;
+            };
+            let select = |r: FileRef| {
+                let seg = &idx.segments[r.seg as usize];
+                let in_scope = all || scopes.iter().any(|s| s.seg == r.seg && s.dir.is_none_or(|d| inside(seg, r.idx, d)));
+                in_scope && q.as_ref().is_none_or(|q| q.matches_at(seg, r.idx))
+            };
+            let etag = |r: FileRef| tags.get(&r.seg).and_then(|m| m.get(&r.idx).copied());
+            (plan(&idx, min_size, &select, &etag), titles)
         };
+        let _ = app.emit("dup-plan", json!({ "id": id, "files": pl.files, "classes": pl.classes.len(), "potential": pl.potential }));
+        let dto = |c: &filecat_core::dupfind::Cand| {
+            let (place, name) = match c.path.trim_end_matches(['/', '\\']).rfind(['/', '\\']) {
+                Some(i) => (c.path[..i].to_string(), c.path[i + 1..].to_string()),
+                None => (String::new(), c.path.clone()),
+            };
+            DupFileDto {
+                seg: c.r.seg,
+                idx: c.r.idx,
+                full: c.path.clone(),
+                name,
+                place,
+                source: titles.get(&c.r.seg).cloned().unwrap_or_default(),
+                mtime: c.mtime,
+                cloud: c.etag.is_some(),
+            }
+        };
+        // найденное копим и отдаём пачками — групп бывают тысячи
+        let pending: Mutex<(Vec<serde_json::Value>, Instant)> = Mutex::new((Vec::new(), Instant::now()));
         let flush = |force: bool| {
             let mut p = pending.lock().unwrap();
             if !p.0.is_empty() && (force || p.1.elapsed() >= Duration::from_millis(300)) {
                 let batch = std::mem::take(&mut p.0);
                 p.1 = Instant::now();
-                let _ = app.emit("dup-groups", json!({ "id": id, "groups": batch }));
+                let _ = app.emit("dup-groups", json!({ "id": id, "items": batch }));
             }
         };
-        let res = find_duplicates_in(
-            &idx,
+        let opts = RunOptions {
+            threads: 2,
+            // бережный режим — ровный темп чтения; без него — сколько даст диск
+            max_bytes_per_sec: if gentle { 80 << 20 } else { 0 },
+            cache_path: Some(st.data_dir.join("hashes.db")),
+        };
+        let res = run(
+            pl,
             &opts,
-            &select,
-            &etag,
             &stop,
             &|p| {
                 let _ = app.emit("dup-progress", json!({ "id": id, "p": p }));
                 flush(false);
             },
-            &|g| {
-                pending.lock().unwrap().0.push(dto(&g));
+            &|f| {
+                let v = match f {
+                    Found::Group { id, size, exact, files } => {
+                        json!({ "group": DupGroupDto { id, size, exact, files: files.iter().map(&dto).collect() } })
+                    }
+                    Found::Drop { id } => json!({ "drop": id }),
+                };
+                pending.lock().unwrap().0.push(v);
                 flush(false);
             },
         );
         flush(true);
-        drop(idx);
         let out = match res {
-            Ok(rep) => json!({ "id": id, "stats": rep.stats }),
+            Ok(()) => json!({ "id": id }),
             Err(e) => json!({ "id": id, "error": if stop.load(Ordering::Relaxed) { "остановлено".to_string() } else { e.to_string() } }),
         };
         let _ = app.emit("dup-done", out);
@@ -1693,7 +1770,7 @@ fn dup_search(app: AppHandle, st: State<Shared>, id: u64, scopes: Vec<DupScope>,
             *cur = None;
         }
     });
-    Ok(id)
+    Ok(())
 }
 
 #[tauri::command]
@@ -2046,6 +2123,7 @@ fn main() {
             preview,
             search_folder,
             dup_search,
+            dup_sizes,
             dup_stop,
             about,
             update::update_check,

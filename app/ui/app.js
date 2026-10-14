@@ -421,7 +421,11 @@ function suggestions(q) {
   if (!q) return [...queries.slice(0, 5), ...paths.slice(0, 8)];
   // «дуб», «dup» — найти дубликаты здесь или на всех дисках
   if (/^(dup|дуб|копи)/i.test(q) && !dupParse(q)) {
-    return [{ kind: 'dup', all: false, label: `Найти дубликаты в «${folderLabel() || 'этой папке'}»` }, { kind: 'dup', all: true, label: 'Найти дубликаты на всех дисках' }];
+    return [
+      { kind: 'dup', tok: 'dup:size', label: 'Одинаковый размер на всех источниках — мгновенно', hint: 'dup:size — копии папок и файлов по размеру, без чтения' },
+      { kind: 'dup', tok: 'dup:', label: `Проверенные копии в «${folderLabel() || 'этой папке'}»`, hint: 'dup: — сравнивает содержимое, крупные первыми' },
+      { kind: 'dup', tok: 'dup:all', label: 'Проверенные копии на всех дисках и в S3', hint: 'dup:all — сравнивает содержимое, крупные первыми' },
+    ];
   }
   if (looksLikePath(q)) {
     return [{ kind: 'go', path: q }, ...paths.filter((x) => x.path.toLowerCase().startsWith(low) && x.path.toLowerCase() !== low).slice(0, 8)];
@@ -442,13 +446,13 @@ function renderDrop() {
   const here = Bz.data?.path;
   drop.innerHTML = Dd.items.map((x, i) => {
     const icon = D_ICON[x.kind] || D_ICON.dup;
-    const body = x.kind === 'dup' ? `<b>${esc(x.label)}</b><small>${x.all ? 'dup:all' : 'dup:'} — одинаковые файлы, крупные сверху</small>`
+    const body = x.kind === 'dup' ? `<b>${esc(x.label)}</b><small>${esc(x.hint)}</small>`
       : x.kind === 'go' ? `Перейти: <b>${esc(x.path)}</b>`
       : x.kind === 'path' ? `<b>${esc(baseName(x.path.replace(/[\\/]$/, '')) || x.path)}</b><small>${x.dev ? esc(x.dev) + ' · ' : ''}${esc(x.path)}</small>`
       : `<b>${esc(x.q)}</b><small>${x.where === here ? 'в этой папке' : 'в ' + esc(x.where)}</small>`;
     const del = x.kind === 'go' || x.kind === 'dup' ? '' : `<span class="del" data-del="${i}" title="Удалить из истории">×</span>`;
     return `<div class="sug" data-i="${i}"><span class="ico">${icon}</span><span class="txt">${body}</span>${del}</div>`;
-  }).join('') + (q ? '' : '<div class="drop-hint">Начните вводить имя — поиск в этой папке и вложенных. Фильтры: ext:mp3 · size:&gt;10mb · type:dir · -слово · dup: — дубликаты</div>');
+  }).join('') + (q ? '' : '<div class="drop-hint">Начните вводить имя — поиск в этой папке и вложенных. Фильтры: ext:mp3 · size:&gt;10mb · type:dir · -слово · dup:size — одинаковые по размеру · dup: — проверенные копии</div>');
   drop.classList.remove('hidden');
 }
 function markSug() {
@@ -460,7 +464,7 @@ async function pickSug(i) {
   if (!x) return;
   $('#omni-drop').classList.add('hidden');
   if (x.kind === 'dup') {
-    $('#b-q').value = x.all ? 'dup:all' : 'dup:';
+    $('#b-q').value = x.tok;
     pushQuery($('#b-q').value);
     runFind();
     return;
@@ -572,40 +576,59 @@ $('#b-q').addEventListener('keydown', async (e) => {
 });
 
 // ---------- дубликаты: dup: в поле поиска ----------
-// «dup:» — в открытой папке и вложенных, «dup:all» — на всех дисках и в S3; остальное в
-// запросе — обычные фильтры (ext:, size:, имя). Что делать с найденным, решает человек:
-// строки — обычные файлы, их можно выделять, удалять, копировать.
-const Dz = { id: 0, key: '', groups: [], progress: null, done: false, error: '', stats: null, all: false, timer: null, started: 0 };
+// «dup:size» — мгновенно, из индекса, на всех источниках: копии папок и файлы одинакового
+// размера (кандидаты, не проверено). «dup:» — проверенные копии в открытой папке и вложенных,
+// «dup:all» — на всех дисках и в S3. Остальное в запросе — обычные фильтры (ext:, size:, имя).
+// Что делать с найденным, решает человек: строки — обычные файлы и папки.
+const Dz = { id: 0, key: '', groups: new Map(), plan: null, progress: null, done: false, error: '', all: false, bysize: false, info: null, timer: null, started: 0 };
 function dupParse(q) {
-  let on = false, all = false;
+  let on = false, all = false, bysize = false;
   const rest = q.split(/\s+/).filter((t) => {
-    const m = /^(dup|дубли|дубликаты|копии):(all|все|всё)?$/i.exec(t);
+    const m = /^(dup|дубли|дубликаты|копии):(all|все|всё|size|размер)?$/i.exec(t);
     if (!m) return true;
     on = true;
-    all = all || !!m[2];
+    const w = (m[2] || '').toLowerCase();
+    if (w === 'size' || w === 'размер') bysize = true;
+    else if (w) all = true;
     return false;
   });
-  return on ? { all, rest: rest.join(' ') } : null;
+  return on ? { all: all || bysize, bysize, rest: rest.join(' ') } : null;
 }
 function dupStop() {
-  if (Dz.id && !Dz.done) invoke('dup_stop').catch(() => {});
+  if (Dz.id && !Dz.done && !Dz.bysize) invoke('dup_stop').catch(() => {});
   Dz.key = '';
 }
+// мелочь — миллионы совпадений по размеру и почти ноль места: от 1 МБ, если размер не задан явно
+const dupMin = (rest) => (/(^|\s)size:/i.test(rest) ? 1 : 1 << 20);
+
 async function runDups(p) {
   const s = curSource();
-  const key = `${p.all}|${p.rest}|${keyOf(s || {})}|${p.all ? '' : Bz.dir}`;
+  const key = `${p.bysize}|${p.all}|${p.rest}|${keyOf(s || {})}|${p.all ? '' : Bz.dir}`;
   if (key === Dz.key && Fz.data?.dups) { renderBrowse(); return; }
+  if (!Dz.done && Dz.id && !Dz.bysize) invoke('dup_stop').catch(() => {});
   Dz.key = key;
-  Object.assign(Dz, { id: Date.now(), groups: [], progress: null, done: false, error: '', stats: null, all: p.all, started: Date.now() });
+  Object.assign(Dz, { id: Date.now(), groups: new Map(), plan: null, progress: null, done: false, error: '', info: null, all: p.all, bysize: p.bysize, started: Date.now() });
   Fz.data = { dups: true };
   Bz.sel = -1;
   Bz.shown = 2000;
   $('#b-list').scrollTop = 0;
-  if (!p.all && s?.peer) { Dz.done = true; Dz.error = 'Дубликаты на другом компьютере — в следующей версии. Сейчас: диски и S3 этого компьютера (dup:all).'; renderBrowse(); return; }
+  if (p.bysize) {
+    renderBrowse();
+    try {
+      const r = await invoke('dup_sizes', { query: p.rest, minSize: dupMin(p.rest) });
+      if (Dz.key !== key) return;
+      for (const g of r.groups) Dz.groups.set(g.id, { ...g, exact: false });
+      Dz.info = r;
+    } catch (e) { Dz.error = String(e); }
+    Dz.done = true;
+    renderBrowse();
+    return;
+  }
+  if (!p.all && s?.peer) { Dz.done = true; Dz.error = 'Дубликаты на другом компьютере — в следующей версии. Сейчас: диски и S3 этого компьютера (dup:all, dup:size).'; renderBrowse(); return; }
   if (!p.all && (!s || s.seg == null)) { Dz.done = true; Dz.error = 'Этот источник ещё индексируется — поиск дубликатов станет доступен, когда индекс будет готов.'; renderBrowse(); return; }
   renderBrowse();
   try {
-    await invoke('dup_search', { id: Dz.id, scopes: p.all ? [] : [{ seg: s.seg, dir: Bz.dir }], all: p.all, query: p.rest, gentle: $('#s-gentle').checked });
+    await invoke('dup_search', { id: Dz.id, scopes: p.all ? [] : [{ seg: s.seg, dir: Bz.dir }], all: p.all, query: p.rest, minSize: dupMin(p.rest), gentle: $('#s-gentle').checked });
   } catch (e) { Dz.done = true; Dz.error = String(e); renderBrowse(); }
 }
 // перерисовка не чаще пары раз в секунду: группы приходят пачками
@@ -613,9 +636,13 @@ function dupSoon() {
   if (Dz.timer) return;
   Dz.timer = setTimeout(() => { Dz.timer = null; if (Fz.data?.dups) renderBrowse(); }, 400);
 }
+listen('dup-plan', ({ payload }) => { if (payload.id === Dz.id) { Dz.plan = payload; dupSoon(); } });
 listen('dup-groups', ({ payload }) => {
   if (payload.id !== Dz.id) return;
-  Dz.groups.push(...payload.groups);
+  for (const x of payload.items) {
+    if (x.group) Dz.groups.set(x.group.id, x.group);
+    else if (x.drop) Dz.groups.delete(x.drop);
+  }
   dupSoon();
 });
 listen('dup-progress', ({ payload }) => {
@@ -627,60 +654,78 @@ listen('dup-done', ({ payload }) => {
   if (payload.id !== Dz.id) return;
   Dz.done = true;
   Dz.error = payload.error || '';
-  Dz.stats = payload.stats || null;
   if (Fz.data?.dups) renderBrowse();
 });
 const wastedOf = (g) => g.size * (g.files.length - 1);
-const STAGE = { grouping: 'подбираю кандидатов', partial: 'сравниваю начало и конец файлов', full: 'сравниваю содержимое', done: 'готово' };
+const plural = (n, one, few, many) => (n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many);
 
 function renderDups() {
   $$('#b-head [data-bsort]').forEach((b) => { b.classList.remove('sorted'); b.dataset.arrow = ''; });
   $('#b-head [data-bsort="files"]').textContent = 'Где';
-  const groups = Dz.groups.slice().sort((a, b) => wastedOf(b) - wastedOf(a) || b.size - a.size);
-  // строки — файлы групп подряд; заголовки групп — не строки, их не выделить
+  const groups = [...Dz.groups.values()].sort((a, b) => wastedOf(b) - wastedOf(a) || b.size - a.size);
+  // строки — файлы и папки групп подряд; заголовки групп — не строки, их не выделить
   Bz.rows = [];
   const parts = [];
   for (const g of groups) {
     if (Bz.rows.length >= Bz.shown) break;
-    parts.push(`<div class="dup-head"><b>${esc(g.files[0].name)}</b><span class="muted">${g.files.length} ${g.files.length < 5 ? 'копии' : 'копий'} по ${fmtSize(g.size)}</span>${g.files.some((f) => f.cloud) ? '<span class="dup-cloud">есть в S3</span>' : ''}<span class="spacer"></span><span class="dup-free">−${fmtSize(wastedOf(g))}</span></div>`);
+    const n = g.files.length;
+    const what = g.is_dir ? `${n} ${plural(n, 'папка', 'папки', 'папок')} по ${fmtSize(g.size)}, в каждой ${fmtNum(g.files_inside)} ${plural(g.files_inside, 'файл', 'файла', 'файлов')}` : `${n} ${plural(n, 'копия', 'копии', 'копий')} по ${fmtSize(g.size)}`;
+    const badge = Dz.bysize ? '<span class="dup-badge maybe" title="Совпал размер. Содержимое не сравнивалось — проверить: dup:all">совпадает размер</span>'
+      : g.exact ? '<span class="dup-badge ok" title="Файлы сравнены целиком">точная копия</span>'
+      : '<span class="dup-badge maybe" title="Совпали начало, конец и 16 кусков по файлу; полная проверка идёт">совпадает по выборке</span>';
+    parts.push(`<div class="dup-head"><span class="ico ${g.is_dir ? 'dir' : ''}">${g.is_dir ? ICON.folder : ICON.file}</span><b>${esc(g.files[0].name)}</b><span class="muted">${what}</span>${badge}${g.files.some((f) => f.cloud) ? '<span class="dup-badge">есть в S3</span>' : ''}<span class="spacer"></span><span class="dup-free">−${fmtSize(wastedOf(g))}</span></div>`);
     for (const f of g.files) {
       const i = Bz.rows.length;
-      Bz.rows.push({ ...f, is_dir: false, size: g.size, files: 1, group: g.id });
+      Bz.rows.push({ ...f, is_dir: !!g.is_dir, size: g.size, files: g.is_dir ? g.files_inside : 1, group: g.id });
       parts.push(`<div class="brow item dup${Bz.sels.has(i) || (!Bz.sels.size && i === Bz.sel) ? ' sel' : ''}" data-i="${i}">
-        <span class="ico">${ICON.file}</span>
+        <span class="ico ${g.is_dir ? 'dir' : ''}">${g.is_dir ? ICON.folder : ICON.file}</span>
         <span class="name" title="${esc(f.full)}">${esc(f.name)} <small class="place">${esc(f.place)}</small></span>
         <span class="muted">${f.mtime ? fmtDate(f.mtime) : ''}</span>
-        <span class="muted">${typeOf({ name: f.name })}</span>
+        <span class="muted">${g.is_dir ? 'Папка' : typeOf({ name: f.name })}</span>
         <span class="num">${fmtSize(g.size)}</span>
         <span class="num muted" title="${esc(f.source)}">${esc(f.source)}</span></div>`);
     }
   }
   restoreSel();
   const total = groups.reduce((a, g) => a + g.files.length, 0);
-  const more = total > Bz.rows.length ? `<div class="more"><button id="b-more">Показать ещё (${fmtNum(total - Bz.rows.length)} файлов)</button></div>` : '';
+  const more = total > Bz.rows.length ? `<div class="more"><button id="b-more">Показать ещё (${fmtNum(total - Bz.rows.length)})</button></div>` : '';
   const empty = Dz.done
-    ? `<p class="more muted">${Dz.error ? esc(Dz.error) : 'Одинаковых файлов не найдено.'}</p>`
-    : '<p class="more muted">Ищу одинаковые файлы… Первые группы появятся здесь, как только подтвердятся.</p>';
+    ? `<p class="more muted">${Dz.error ? esc(Dz.error) : Dz.bysize ? 'Файлов и папок одинакового размера не найдено.' : 'Одинаковых файлов не найдено.'}</p>`
+    : `<p class="more muted">${Dz.bysize ? 'Группирую по размеру…' : 'Ищу одинаковые файлы — крупные первыми. Группы появятся здесь, как только совпадут.'}</p>`;
   $('#b-list').innerHTML = parts.length ? parts.join('') + more : empty;
   $('#b-more')?.addEventListener('click', () => { Bz.shown += 3000; renderBrowse(); });
 
-  // низ: ход поиска, итог и где искать
+  // низ: что найдено, ход поиска, переключатели
   const freed = groups.reduce((a, g) => a + wastedOf(g), 0);
-  const copies = groups.reduce((a, g) => a + g.files.length - 1, 0);
-  const found = groups.length ? `групп: ${fmtNum(groups.length)} · лишних копий: ${fmtNum(copies)} · можно освободить ${fmtSize(freed)}` : 'пока не найдено';
-  const p = Dz.progress;
-  const prog = Dz.done ? (Dz.error && groups.length ? ` · ${esc(Dz.error)}` : ` · за ${Math.max(1, Math.round((Date.now() - Dz.started) / 1000))} с`)
-    : p ? ` · ${STAGE[p.stage] || p.stage}${p.stage === 'full' && p.bytes_total ? ` ${Math.floor((p.bytes_done / p.bytes_total) * 100)}%` : p.total ? ` ${fmtNum(p.done)} из ${fmtNum(p.total)}` : ''}` : ' · начинаю…';
-  const where = Dz.all ? 'на всех дисках' : `в «${esc(folderLabel())}»`;
-  const other = Dz.all ? `<button data-dup="here">искать только в «${esc(folderLabel())}»</button>` : '<button data-dup="all">искать на всех дисках</button>';
-  $('#b-foot').innerHTML = `Дубликаты ${where}: ${found}${prog} ${other}${Dz.done ? '' : ' <button data-dup="stop">Остановить</button>'}`;
+  const min = dupMin(dupParse(Fz.query)?.rest || '') > 1 ? ' · файлы от 1 МБ (меньше: size:>0)' : '';
+  let text;
+  if (Dz.bysize) {
+    const r = Dz.info;
+    text = r ? `Одинаковый размер на всех источниках: копий папок — ${fmtNum(r.dir_groups)}, групп файлов — ${fmtNum(r.file_groups)} · если это копии, лишнего ${fmtSize(r.potential)} · ${r.ms.toFixed(0)} мс${r.total > r.groups.length ? ` · показаны крупные ${fmtNum(r.groups.length)}` : ''}${min}`
+      : 'Группирую по размеру…';
+  } else {
+    const p = Dz.progress, pl = Dz.plan;
+    const found = groups.length ? `групп: ${fmtNum(groups.length)} (точных ${fmtNum(groups.filter((g) => g.exact).length)}) · можно освободить ${fmtSize(freed)}` : 'пока не найдено';
+    const prog = Dz.done ? (Dz.error ? ` · ${esc(Dz.error)}` : ` · проверено за ${Math.max(1, Math.round((Date.now() - Dz.started) / 1000))} с`)
+      : p ? ` · проверено ${fmtNum(p.files_done)} из ${fmtNum(p.files)} кандидатов · прочитано ${fmtSize(p.bytes_read)}` : pl ? ` · кандидатов: ${fmtNum(pl.files)}` : ' · подбираю кандидатов…';
+    text = `Дубликаты ${Dz.all ? 'на всех дисках' : `в «${esc(folderLabel())}»`}: ${found}${prog}${min}`;
+  }
+  const btn = (k, t) => `<button data-dup="${k}">${t}</button>`;
+  const switches = [
+    !Dz.bysize && btn('size', 'только по размеру (мгновенно)'),
+    (Dz.bysize || !Dz.all) && btn('all', 'проверить на всех дисках'),
+    !Dz.bysize && Dz.all && btn('here', `проверить только в «${esc(folderLabel())}»`),
+    !Dz.done && !Dz.bysize && btn('stop', 'Остановить'),
+  ].filter(Boolean).join('');
+  $('#b-foot').innerHTML = `${text} ${switches}`;
 }
 $('#b-foot').addEventListener('click', (e) => {
   const b = e.target.closest('[data-dup]');
   if (!b) return;
   if (b.dataset.dup === 'stop') { invoke('dup_stop').catch(() => {}); return; }
   const p = dupParse(Fz.query) || { rest: '' };
-  $('#b-q').value = [b.dataset.dup === 'all' ? 'dup:all' : 'dup:', p.rest].filter(Boolean).join(' ');
+  const tok = { size: 'dup:size', all: 'dup:all', here: 'dup:' }[b.dataset.dup];
+  $('#b-q').value = [tok, p.rest].filter(Boolean).join(' ');
   runFind();
 });
 
@@ -889,6 +934,7 @@ function activate(i) {
   const it = Bz.rows[i];
   if (!it) return;
   if (Fz.query) pushQuery(Fz.query);
+  if (it.is_dir && it.full) { clearQuery(); goPath(it.full, null); return; }
   if (it.is_dir) Bz.live ? openLive(itemPath(it)) : openDir(it.idx);
   else if (Fz.query && it.place != null && Bz.data.remote) goPath(joinPath(Bz.data.path, it.place));
   else if (!Bz.data.remote) openFile(it);
@@ -1642,8 +1688,12 @@ listen('jobs', ({ payload }) => {
     finished.forEach((j) => tasksDone.add(j.id));
     // в найденных дубликатах удалённое и перемещённое больше не показываем
     const gone = new Set(finished.filter((j) => ['trash', 'delete', 'move'].includes(j.kind) && j.state !== 'cancelled' && j.state !== 'interrupted').flatMap((j) => (j.items || []).map((x) => x.path)));
-    if (gone.size && Dz.groups.length) {
-      Dz.groups = Dz.groups.map((g) => ({ ...g, files: g.files.filter((f) => !gone.has(f.full)) })).filter((g) => g.files.length > 1);
+    if (gone.size && Dz.groups.size) {
+      for (const [id, g] of Dz.groups) {
+        const files = g.files.filter((f) => !gone.has(f.full));
+        if (files.length > 1) Dz.groups.set(id, { ...g, files });
+        else Dz.groups.delete(id);
+      }
     }
     if (Bz.data && !Bz.busy) { if (Bz.live) openLive(Bz.data.path, true); else openDir(Bz.dir, true); }
   }

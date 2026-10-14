@@ -468,6 +468,9 @@ svg { display: block; width: 100%; height: 100%; }
 .dup-head:first-child { border-top: none; margin-top: 0; }
 .dup-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .dup-head .dup-free { color: var(--accent); font-variant-numeric: tabular-nums; font-weight: 600; }
-.dup-head .dup-cloud { font-size: 11px; color: var(--muted); border: 1px solid var(--border-strong); border-radius: 4px; padding: 0 5px; }
+.dup-badge { font-size: 11px; color: var(--muted); border: 1px solid var(--border-strong); border-radius: 4px; padding: 0 5px; white-space: nowrap; }
+.dup-badge.ok { color: var(--success); border-color: var(--success); }
+.dup-badge.maybe { color: var(--warning, #d4a72c); border-color: var(--warning, #d4a72c); }
+.dup-head .ico { flex: none; }
 .brow.dup .name { padding-left: 4px; }
 #b-foot button { padding: 0 8px; font-size: 12px; margin-left: 6px; }
