@@ -1,4 +1,8 @@
 const { invoke } = window.__TAURI__.core;
+// тестовая версия (dev.bat): что интерфейс поднялся и его ошибки — в журнал dev.log
+const devLog = (m) => { if (/fhdev/.test(location.href)) invoke('dev_log', { msg: String(m) }).catch(() => {}); };
+window.addEventListener('error', (e) => devLog(`ошибка: ${e.message} @ ${(e.filename || '').split('/').pop()}:${e.lineno}`));
+window.addEventListener('unhandledrejection', (e) => devLog(`ошибка (promise): ${e.reason}`));
 const { listen } = window.__TAURI__.event;
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -1715,6 +1719,7 @@ listen('jobs', ({ payload }) => {
   if (!t.root || !Bz.sources.some((x) => x.key === t.root)) t.root = (Bz.sources.find((x) => x.indexed && !x.peer) || Bz.sources[0] || {}).key || null;
   await tabRestore(t);
   tabCapture();
+  devLog(`интерфейс готов: источников ${Bz.sources.length}, папка ${Bz.data?.path || '—'}`);
 })();
 
 // устройство появилось в сети, ушло из неё или сопряжено новое

@@ -1774,6 +1774,14 @@ fn dup_search(
     Ok(())
 }
 
+/// Журнал тестовой версии: интерфейс сообщает, что поднялся, и свои ошибки.
+#[tauri::command]
+fn dev_log(st: State<Shared>, msg: String) {
+    if std::env::var_os("FILEHUNTER_UI_DIR").is_some() {
+        devui::log(&st.data_dir, &msg);
+    }
+}
+
 #[tauri::command]
 fn dup_stop(st: State<Shared>) {
     if let Some(s) = st.dup_run.lock().unwrap().take() {
@@ -2078,6 +2086,11 @@ fn main() {
             }
         }));
     }
+    // тестовая версия: интерфейс с диска через свою схему программы (см. devui.rs)
+    if let Some(dir) = std::env::var_os("FILEHUNTER_UI_DIR") {
+        let dir = PathBuf::from(dir);
+        builder = builder.register_uri_scheme_protocol(devui::SCHEME, move |_ctx, req| devui::respond(&dir, req.uri().path()));
+    }
     builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -2125,6 +2138,7 @@ fn main() {
             search_folder,
             dup_search,
             dup_sizes,
+            dev_log,
             dup_stop,
             about,
             update::update_check,
@@ -2152,14 +2166,9 @@ fn main() {
             {
                 let mut cfg = app.config().app.windows.first().cloned().ok_or("нет окна в tauri.conf.json")?;
                 // FILEHUNTER_UI_DIR (dev.bat) — интерфейс из папки проекта: правки видны по F5
-                if let Some(dir) = std::env::var_os("FILEHUNTER_UI_DIR") {
-                    let addr = devui::serve(PathBuf::from(dir))?;
-                    let mut cap = tauri::ipc::CapabilityBuilder::new("dev-ui").window("main").remote(format!("{addr}/*"));
-                    for p in ["core:default", "dialog:default", "clipboard-manager:allow-read-text", "clipboard-manager:allow-write-text"] {
-                        cap = cap.permission(p);
-                    }
-                    app.add_capability(cap)?;
-                    cfg.url = tauri::WebviewUrl::External(format!("{addr}/index.html").parse()?);
+                if std::env::var_os("FILEHUNTER_UI_DIR").is_some() {
+                    cfg.url = tauri::WebviewUrl::CustomProtocol(devui::url().parse()?);
+                    devui::log(&st.data_dir, "окно открыто, интерфейс из папки проекта");
                 }
                 let mut w = tauri::WebviewWindowBuilder::from_config(app.handle(), &cfg)?;
                 if std::env::var_os("FILECAT_DATA_DIR").is_some() {
