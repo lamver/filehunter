@@ -7,6 +7,8 @@ setlocal
 cd /d "%~dp0"
 set "FILECAT_DATA_DIR=%LOCALAPPDATA%\FileHunter (dev)"
 set "FILECAT_NAME=%COMPUTERNAME% (dev)"
+rem интерфейс из папки проекта: правки HTML/CSS/JS видны по F5 в окне, без пересборки
+set "FILEHUNTER_UI_DIR=%~dp0app\ui"
 set "SRC=%LOCALAPPDATA%\FileHunter"
 
 if not exist "%FILECAT_DATA_DIR%\index.bin" if exist "%SRC%\index.bin" (

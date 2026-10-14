@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod creds;
+mod devui;
 mod drives;
 mod fsops;
 mod jobs;
@@ -2149,7 +2150,17 @@ fn main() {
             // рядом с установленной: у неё свои вкладки и история (данные встроенного браузера)
             // и заголовок, по которому их не перепутать.
             {
-                let cfg = app.config().app.windows.first().cloned().ok_or("нет окна в tauri.conf.json")?;
+                let mut cfg = app.config().app.windows.first().cloned().ok_or("нет окна в tauri.conf.json")?;
+                // FILEHUNTER_UI_DIR (dev.bat) — интерфейс из папки проекта: правки видны по F5
+                if let Some(dir) = std::env::var_os("FILEHUNTER_UI_DIR") {
+                    let addr = devui::serve(PathBuf::from(dir))?;
+                    let mut cap = tauri::ipc::CapabilityBuilder::new("dev-ui").window("main").remote(format!("{addr}/*"));
+                    for p in ["core:default", "dialog:default", "clipboard-manager:allow-read-text", "clipboard-manager:allow-write-text"] {
+                        cap = cap.permission(p);
+                    }
+                    app.add_capability(cap)?;
+                    cfg.url = tauri::WebviewUrl::External(format!("{addr}/index.html").parse()?);
+                }
                 let mut w = tauri::WebviewWindowBuilder::from_config(app.handle(), &cfg)?;
                 if std::env::var_os("FILECAT_DATA_DIR").is_some() {
                     w = w.data_directory(st.data_dir.join("webview")).title("FileHunter — тестовая версия");

@@ -8,6 +8,8 @@ BASE="$HOME/Library/Application Support"
 export FILECAT_DATA_DIR="$BASE/FileHunter (dev)"
 export FILECAT_NAME="$(scutil --get ComputerName 2>/dev/null || hostname) (dev)"
 SRC="$BASE/FileHunter"
+# интерфейс из папки проекта: правки HTML/CSS/JS видны по Ctrl+R/F5 в окне, без пересборки
+export FILEHUNTER_UI_DIR="$(pwd)/app/ui"
 
 if [ ! -f "$FILECAT_DATA_DIR/index.bin" ] && [ -f "$SRC/index.bin" ]; then
   echo "Копирую индекс установленной версии..."

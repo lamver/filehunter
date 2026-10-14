@@ -420,7 +420,7 @@ function suggestions(q) {
   const queries = loadKey(QHIST_KEY).map((x) => ({ kind: 'query', q: x.q, where: x.where, peer: x.peer || null, dev: peerName(x.peer), key: `${x.q}\n${x.where}` }));
   if (!q) return [...queries.slice(0, 5), ...paths.slice(0, 8)];
   // «дуб», «dup» — найти дубликаты здесь или на всех дисках
-  if (/^(dup|дуб|копи)/i.test(q) && !dupParse(q)) {
+  if (/^(dup|dub|дуб|копи)/i.test(q) && !dupParse(q)) {
     return [
       { kind: 'dup', tok: 'dup:size', label: 'Одинаковый размер на всех источниках — мгновенно', hint: 'dup:size — копии папок и файлов по размеру, без чтения' },
       { kind: 'dup', tok: 'dup:', label: `Проверенные копии в «${folderLabel() || 'этой папке'}»`, hint: 'dup: — сравнивает содержимое, крупные первыми' },
@@ -584,7 +584,7 @@ const Dz = { id: 0, key: '', groups: new Map(), plan: null, progress: null, done
 function dupParse(q) {
   let on = false, all = false, bysize = false;
   const rest = q.split(/\s+/).filter((t) => {
-    const m = /^(dup|дубли|дубликаты|копии):(all|все|всё|size|размер)?$/i.exec(t);
+    const m = /^(dup|dub|дубли|дубликаты|копии):(all|все|всё|size|размер)?$/i.exec(t);
     if (!m) return true;
     on = true;
     const w = (m[2] || '').toLowerCase();
@@ -1887,3 +1887,6 @@ $('#share-save').addEventListener('click', async () => {
   toast(share.roots.length ? `«${shareFor.name}» теперь видит: ${share.roots.length}` : `«${shareFor.name}» больше ничего не видит на этом компьютере`, 5000);
   loadSources();
 });
+
+// F5 — перезагрузить интерфейс (в тестовой версии подхватывает правки из папки проекта)
+document.addEventListener('keydown', (e) => { if (e.key === 'F5') { e.preventDefault(); location.reload(); } });
