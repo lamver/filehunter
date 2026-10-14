@@ -1,0 +1,32 @@
+# Тестовая сборка для Windows — exe, который запускается рядом с установленной
+# версией (своя папка данных, интерфейс из папки проекта). Без установщика и выпуска:
+# только проверить изменения до релиза. Запуск — кнопкой или `gh workflow run`.
+
+name: Test build
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: test-build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-build
+      - name: Сборка
+        run: cargo build -p filehunter --profile fast
+      - uses: actions/upload-artifact@v4
+        with:
+          name: filehunter-test
+          path: target/fast/filehunter.exe
+          retention-days: 7

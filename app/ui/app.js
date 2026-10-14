@@ -11,6 +11,19 @@ const invoke = !DEV ? window.__TAURI__.core.invoke : async (cmd, args) => {
 function devLog(m) { if (DEV) window.__TAURI__.core.invoke('dev_log', { msg: String(m) }).catch(() => {}); }
 window.addEventListener('error', (e) => devLog(`ошибка: ${e.message} @ ${(e.filename || '').split('/').pop()}:${e.lineno}`));
 window.addEventListener('unhandledrejection', (e) => devLog(`ошибка (promise): ${e.reason}`));
+// тестовая версия: файл интерфейса изменился в папке проекта — окно перезагружается само
+if (DEV) {
+  const seen = {};
+  setInterval(async () => {
+    for (const f of ['index.html', 'app.js', 'style.css']) {
+      try {
+        const text = await (await fetch(f, { cache: 'no-store' })).text();
+        if (seen[f] !== undefined && seen[f] !== text) { devLog(`изменился ${f} — перезагружаю`); location.reload(); return; }
+        seen[f] = text;
+      } catch { /* файл сохраняется прямо сейчас — проверим в следующий раз */ }
+    }
+  }, 1000);
+}
 const { listen } = window.__TAURI__.event;
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
