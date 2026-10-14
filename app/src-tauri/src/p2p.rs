@@ -23,7 +23,7 @@ use tauri::{AppHandle, Emitter, Manager};
 const ALPN: &[u8] = b"filecat/1";
 /// Версия протокола: растёт, когда появляются новые запросы.
 /// 2 — операции с файлами (копирование, перемещение, удаление по сети).
-pub const PROTO: u32 = 3;
+pub const PROTO: u32 = 4;
 /// Больше этого JSON-сообщение быть не может — защита от мусора.
 const MAX_MSG: u32 = 64 << 20;
 /// Кусок файла за один запрос при скачивании.
@@ -174,8 +174,20 @@ pub async fn start(app: AppHandle, st: Shared) -> anyhow::Result<Arc<P2p>> {
     // раз в 20 секунд проверяем, кто из сопряжённых доступен
     let watcher = p2p.clone();
     tauri::async_runtime::spawn(async move {
+        let mut tick = 0u32;
         loop {
             watcher.refresh_online(&app).await;
+            // копии индекса: раз в пару минут сверяем версии у тех, кто в сети и умеет их отдавать
+            if tick % 6 == 0 {
+                for p in watcher.peers() {
+                    if watcher.is_online(&p.id) && watcher.proto_of(&p.id) >= 4 {
+                        if let Err(e) = crate::replica::sync_peer(&app, &st, &watcher, &p.id).await {
+                            eprintln!("копия индекса {}: {e}", p.name);
+                        }
+                    }
+                }
+            }
+            tick = tick.wrapping_add(1);
             tokio::time::sleep(Duration::from_secs(20)).await;
         }
     });
@@ -193,6 +205,11 @@ impl P2p {
 
     pub fn is_online(&self, id: &str) -> bool {
         self.online.lock().unwrap().get(id).copied().unwrap_or(false)
+    }
+
+    /// Версия протокола устройства (1 — очень старая).
+    pub fn proto_of(&self, id: &str) -> u32 {
+        self.proto.lock().unwrap().get(id).copied().unwrap_or(1)
     }
 
     /// На устройстве старая версия FileHunter (не знает новых запросов).
@@ -494,7 +511,7 @@ fn val<T: Serialize>(v: T) -> Result<(Value, Vec<u8>), String> {
 }
 
 /// Запросы, которые другой компьютер может выполнить здесь: те же команды, что и в окне.
-const NO_ACCESS: &str = "Нет доступа: этот компьютер вам это не открывал";
+pub const NO_ACCESS: &str = "Нет доступа: этот компьютер вам это не открывал";
 const NO_WRITE: &str = "Нет доступа: этот компьютер открыл вам только просмотр";
 
 /// Запросы, которые другой компьютер может выполнить здесь — только в пределах того,
@@ -535,6 +552,12 @@ async fn serve(app: &AppHandle, share: &Share, method: &str, a: Value, data: Vec
             need_path("from", true)?;
             need_path("to", true)?;
         }
+        "replica_list" => {
+            if !share.can_view() {
+                return Err(NO_ACCESS.into());
+            }
+        }
+        "replica_get" => need_path("root", false)?,
         "trash" => {
             let files: Vec<Value> = arg(&a, "files")?;
             if !share.can_write() || !files.iter().all(|f| f["path"].as_str().is_some_and(|p| share.allows(p))) {
@@ -569,6 +592,25 @@ async fn serve(app: &AppHandle, share: &Share, method: &str, a: Value, data: Vec
         "fs_delete" => {
             let (path, forever): (String, bool) = (arg(&a, "path")?, arg(&a, "forever")?);
             fs(Box::new(move |st| val(fsops::delete(st, &path, forever)?))).await
+        }
+        // копия индекса: какие корни открыты и какой версии; снимок корня кусками
+        "replica_list" => {
+            let version = st.generation.load(std::sync::atomic::Ordering::Relaxed);
+            val(share.roots.iter().map(|r| json!({ "root": r, "version": version })).collect::<Vec<_>>())
+        }
+        "replica_get" => {
+            let (root, offset): (String, u64) = (arg(&a, "root")?, arg(&a, "offset")?);
+            if !share.roots.iter().any(|r| r.eq_ignore_ascii_case(&root)) {
+                return Err(NO_ACCESS.into());
+            }
+            let version = st.generation.load(std::sync::atomic::Ordering::Relaxed);
+            fs(Box::new(move |st| {
+                let b = crate::replica::export(st, &root, version, offset == 0)?;
+                let from = (offset as usize).min(b.len());
+                let to = (from + CHUNK as usize).min(b.len());
+                Ok((json!({ "total": b.len() }), b[from..to].to_vec()))
+            }))
+            .await
         }
         "fs_rename" => {
             let (from, to): (String, String) = (arg(&a, "from")?, arg(&a, "to")?);

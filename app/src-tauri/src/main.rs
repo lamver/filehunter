@@ -6,6 +6,7 @@ mod drives;
 mod fsops;
 mod jobs;
 mod p2p;
+mod replica;
 mod update;
 mod watch;
 
@@ -68,6 +69,8 @@ struct AppState {
     p2p: std::sync::OnceLock<Arc<p2p::P2p>>,
     /// Почему связь не запустилась (пусто — всё в порядке или ещё запускается).
     p2p_error: Mutex<String>,
+    /// Копии индекса других компьютеров (то, что они нам открыли).
+    replicas: RwLock<HashMap<String, replica::PeerReplica>>,
     /// Идущий поиск дубликатов (флаг остановки).
     dup_run: Mutex<Option<Arc<AtomicBool>>>,
     /// ETag бакетов: корень → (когда сканировали, номер записи → ETag).
@@ -294,6 +297,11 @@ fn drive_log(st: State<Shared>) -> Vec<drives::DriveEvent> {
 /// Находит источник и папку по введённому в адресную строку пути.
 #[tauri::command(async)]
 fn locate(st: State<Shared>, path: String) -> CmdResult<(u16, Option<u32>)> {
+    locate_in(&st, &path)
+}
+
+/// Источник и папка по пути (по индексу).
+pub(crate) fn locate_in(st: &AppState, path: &str) -> CmdResult<(u16, Option<u32>)> {
     let p = path.trim().trim_end_matches(['\\', '/']).to_lowercase();
     let idx = st.index.read().unwrap();
     let (si, seg) = idx
@@ -576,6 +584,11 @@ struct AllItemDto {
     /// Название источника: «Локальный диск (C:)», «Rechka».
     source: String,
     cloud: bool,
+    /// Другой компьютер (из копии его индекса); у своих — нет.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    peer: Option<String>,
+    /// Копия снята тогда-то (секунды Unix); у своих — 0.
+    asof: i64,
 }
 
 #[derive(Serialize)]
@@ -583,6 +596,8 @@ struct AllFoundDto {
     items: Vec<AllItemDto>,
     total: usize,
     ms: f64,
+    /// Компьютеры, по которым искали в копии: их не надо спрашивать по сети.
+    covered: Vec<String>,
 }
 
 /// Название источника без опроса дисков (быстро): имя, данное пользователем, метка тома, имя S3.
@@ -653,10 +668,55 @@ fn search_all(st: State<Shared>, query: String) -> CmdResult<AllFoundDto> {
                 hidden: e.flags & (filecat_core::index::flags::HIDDEN | filecat_core::index::flags::SYSTEM) != 0,
                 source: titles.entry(si).or_insert_with(|| source_title(&st, &prefs, &s.info.root)).clone(),
                 cloud: s.is_remote(),
+                peer: None,
+                asof: 0,
             }
         })
-        .collect();
-    Ok(AllFoundDto { items, total, ms: t.elapsed().as_secs_f64() * 1000.0 })
+        .collect::<Vec<_>>();
+    drop(idx);
+    // копии других компьютеров
+    let mut items = items;
+    let mut covered = Vec::new();
+    let reps = st.replicas.read().unwrap();
+    for (peer, r) in reps.iter() {
+        covered.push(peer.clone());
+        let name = st.p2p.get().map(|p| p.peer_name(peer)).unwrap_or_default();
+        for (si, s) in r.index.segments.iter().enumerate() {
+            let (hits, n) = search_in(&r.index, si as u16, None, &q, LIMIT);
+            total += n;
+            if hits.is_empty() {
+                continue;
+            }
+            let totals = hits.iter().any(|&i| s.entries[i as usize].is_dir()).then(|| s.subtree_totals());
+            let m = &r.meta[si];
+            let title = m.root.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().unwrap_or(&m.root).to_string();
+            for i in hits {
+                let e = &s.entries[i as usize];
+                let (size, files) = match (&totals, e.is_dir()) {
+                    (Some((sz, ct)), true) => (sz[i as usize], ct[i as usize]),
+                    _ => (e.size, 1),
+                };
+                items.push(AllItemDto {
+                    seg: si as u16,
+                    idx: i,
+                    name: s.name(i).to_string(),
+                    full: s.path(i).to_string_lossy().into_owned(),
+                    place: s.parent_path(i).to_string_lossy().into_owned(),
+                    is_dir: e.is_dir(),
+                    size,
+                    files,
+                    mtime: e.mtime,
+                    hidden: e.flags & (filecat_core::index::flags::HIDDEN | filecat_core::index::flags::SYSTEM) != 0,
+                    source: format!("{name} · {title}"),
+                    cloud: s.is_remote(),
+                    peer: Some(peer.clone()),
+                    asof: m.fetched,
+                });
+            }
+        }
+    }
+    items.truncate(LIMIT * 2);
+    Ok(AllFoundDto { items, total, ms: t.elapsed().as_secs_f64() * 1000.0, covered })
 }
 
 /// Сверяет открытую папку с тем, что реально лежит на диске или в S3 (одно чтение папки),
@@ -1091,6 +1151,8 @@ fn p2p_rename(st: State<Shared>, peer: String, name: String) -> CmdResult<()> {
 #[tauri::command]
 async fn p2p_remove(st: State<'_, Shared>, peer: String) -> CmdResult<()> {
     p2p_of(&st)?.remove_peer(&peer).await;
+    // копия его индекса больше не нужна
+    replica::forget(&st, &peer);
     Ok(())
 }
 
@@ -2177,9 +2239,11 @@ fn main() {
         p2p_error: Mutex::new(String::new()),
         jobs: std::sync::OnceLock::new(),
         dup_run: Mutex::new(None),
+        replicas: RwLock::new(HashMap::new()),
         etags: Mutex::new(HashMap::new()),
     });
 
+    *state.replicas.write().unwrap() = replica::load_all(&state);
     let mut builder = tauri::Builder::default();
     // второй запуск не создаёт второй экземпляр, а показывает уже работающее окно (оно могло быть в трее).
     // Проверочный экземпляр со своей папкой данных (FILECAT_DATA_DIR) запускать можно.

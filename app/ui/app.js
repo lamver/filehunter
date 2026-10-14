@@ -566,8 +566,17 @@ async function runFind() {
 // компьютеры — каждый ищет у себя по тому, что открыл. Строки знают свой полный путь.
 async function searchEverywhere(q) {
   const t = performance.now();
-  const local = invoke('search_all', { query: q }).catch((e) => ({ items: [], total: 0, error: String(e) }));
-  const peers = Bz.sources.filter((x) => x.peer && x.online && x.seg != null).map(async (x) => {
+  // свои источники и копии индекса других компьютеров — одним вызовом
+  const local = await invoke('search_all', { query: q }).catch((e) => ({ items: [], total: 0, covered: [], error: String(e) }));
+  for (const it of local.items) {
+    if (!it.peer) continue;
+    const p = Pz.info.peers.find((x) => x.id === it.peer);
+    // компьютер не в сети — показываем по копии, с датой
+    if (!p?.online && it.asof) it.source += ` · на ${fmtDate(it.asof)}`;
+  }
+  const covered = new Set(local.covered || []);
+  // остальных (старые версии без копий) спрашиваем по сети
+  const peers = Bz.sources.filter((x) => x.peer && x.online && x.seg != null && !covered.has(x.peer)).map(async (x) => {
     try {
       const r = await api('search_folder', { seg: x.seg, dir: null, query: q }, x);
       const root = x.root.replace(/[\\/]+$/, '');
@@ -581,7 +590,7 @@ async function searchEverywhere(q) {
       };
     } catch { return { items: [], total: 0, failed: x.peerName }; }
   });
-  const parts = [await local, ...(await Promise.all(peers))];
+  const parts = [local, ...(await Promise.all(peers))];
   return {
     everywhere: true,
     items: parts.flatMap((p) => p.items),
@@ -1777,6 +1786,8 @@ listen('jobs', ({ payload }) => {
   TK.list.forEach((j) => { if (!ACTIVE.includes(j.state)) tasksDone.add(j.id); });
   renderTasks();
 })();
+
+listen('replicas-changed', () => { if (Fz.query && Fz.data?.everywhere) runFind(); });
 
 // ---------- старт ----------
 (async () => {

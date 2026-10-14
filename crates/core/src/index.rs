@@ -367,6 +367,48 @@ impl Segment {
         }
     }
 
+    /// Папка `dir` со всем содержимым как отдельный сегмент с корнем в ней —
+    /// то, что другой компьютер открыл нам (не весь диск). Удалённое не попадает.
+    pub fn subtree(&self, dir: u32) -> Segment {
+        let ch = Children::build(&self.entries);
+        let mut b = SegmentBuilder::default();
+        let mut queue: std::collections::VecDeque<(u32, u32)> = ch.of(dir).map(|c| (c, NO_PARENT)).collect();
+        let (mut files, mut dirs, mut bytes) = (0u64, 0u64, 0u64);
+        while let Some((old, parent)) = queue.pop_front() {
+            let e = &self.entries[old as usize];
+            if e.is_deleted() {
+                continue;
+            }
+            let new = b.push_lowered(parent, self.name(old), self.lower(old), e.flags, e.size, e.mtime);
+            if e.is_dir() {
+                dirs += 1;
+                queue.extend(ch.of(old).map(|c| (c, new)));
+            } else {
+                files += 1;
+                bytes += e.size;
+            }
+        }
+        let info = SourceInfo { root: self.path(dir).to_string_lossy().into_owned(), files, dirs, bytes, ..self.info.clone() };
+        b.finish(info)
+    }
+
+    /// Сегмент одним сжатым блоком — для передачи на другой компьютер.
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        let mut enc = zstd::Encoder::new(Vec::new(), 3)?;
+        bincode::serialize_into(&mut enc, self)?;
+        Ok(enc.finish()?)
+    }
+
+    pub fn from_bytes(b: &[u8]) -> Result<Segment> {
+        use bincode::Options;
+        let limit = (b.len() as u64).saturating_mul(16).max(64 << 20);
+        let dec = zstd::Decoder::new(b)?;
+        let opts = bincode::DefaultOptions::new().with_fixint_encoding().allow_trailing_bytes().with_limit(limit);
+        let mut seg: Segment = opts.deserialize_from(dec).context("сегмент повреждён")?;
+        seg.rebuild_lower();
+        Ok(seg)
+    }
+
     fn rebuild_lower(&mut self) {
         use rayon::prelude::*;
         let lowers: Vec<String> = (0..self.entries.len() as u32)
@@ -782,6 +824,30 @@ mod save_tests {
         // испорченный файл: загрузка не падает, а берёт резервную копию
         std::fs::write(&path, b"\x28\xb5\x2f\xfd garbage garbage garbage").unwrap();
         assert_eq!(Index::load(&path).unwrap().len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    /// Открытая папка уходит отдельным сегментом: только её содержимое, с корнем в ней;
+    /// после передачи (в байты и обратно) пути и поиск те же.
+    #[test]
+    fn subtree_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("filecat-sub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("shared").join("inner")).unwrap();
+        std::fs::create_dir_all(dir.join("private")).unwrap();
+        std::fs::write(dir.join("shared").join("inner").join("a.txt"), b"aaa").unwrap();
+        std::fs::write(dir.join("shared").join("b.txt"), b"bb").unwrap();
+        std::fs::write(dir.join("private").join("secret.txt"), b"x").unwrap();
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let seg = crate::scan::scan_walk(&dir, &crate::scan::ScanOptions::default(), &cancel, &|_| {}).unwrap();
+        let shared = (0..seg.entries.len() as u32).find(|&i| seg.name(i) == "shared").unwrap();
+        let sub = Segment::from_bytes(&seg.subtree(shared).to_bytes().unwrap()).unwrap();
+        assert_eq!(Path::new(&sub.info.root), dir.join("shared"));
+        assert_eq!((sub.info.files, sub.info.dirs, sub.info.bytes), (2, 1, 5));
+        let mut paths: Vec<PathBuf> = (0..sub.entries.len() as u32).map(|i| sub.path(i)).collect();
+        paths.sort();
+        assert_eq!(paths, vec![dir.join("shared").join("b.txt"), dir.join("shared").join("inner"), dir.join("shared").join("inner").join("a.txt")]);
+        assert!((0..sub.entries.len() as u32).all(|i| sub.name(i) != "secret.txt"));
+        assert_eq!(sub.lower(0), sub.name(0).to_lowercase());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
