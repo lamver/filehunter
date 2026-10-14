@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7
+
+- macOS build fixed. Search by meaning works on Windows and on Macs with Apple Silicon;
+  on Intel Macs it is not available yet (ONNX Runtime ships no ready libraries for
+  them), everything else works.
+
 ## 0.1.6
 
 - Search by meaning: under the name matches a "Similar by meaning" block shows

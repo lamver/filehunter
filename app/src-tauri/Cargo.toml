@@ -27,8 +27,6 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 rand = "0.9"
 blake3 = "1.5"
 rayon = "1.10"
-# поиск по смыслу: multilingual-e5-small через ONNX Runtime (собирается в exe), на процессоре
-fastembed = { version = "=7.1.0", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Credentials"] }
@@ -38,3 +36,8 @@ keyring = { version = "3", features = ["apple-native"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 keyring = { version = "3", features = ["sync-secret-service"] }
+
+# поиск по смыслу: multilingual-e5-small через ONNX Runtime (собирается в exe), на процессоре;
+# для Mac на Intel у ONNX Runtime нет готовых библиотек — там поиск по смыслу выключен
+[target.'cfg(not(all(target_os = "macos", target_arch = "x86_64")))'.dependencies]
+fastembed = { version = "=7.1.0", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }

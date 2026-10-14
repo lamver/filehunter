@@ -78,7 +78,7 @@ pub struct Semantic {
     store: RwLock<Store>,
     /// Ключ — «корень» своего источника или «компьютер|корень» копии.
     ids: RwLock<HashMap<String, SegIds>>,
-    model: Mutex<Option<fastembed::TextEmbedding>>,
+    model: Mutex<Option<engine::Model>>,
     pub status: Mutex<Status>,
     dir: PathBuf,
     wake: AtomicBool,
@@ -177,12 +177,7 @@ impl Semantic {
     fn load_model(&self, threads: usize) -> Result<(), String> {
         let mut m = self.model.lock().unwrap();
         if m.is_none() {
-            let mut o = fastembed::TextInitOptions::new(fastembed::EmbeddingModel::MultilingualE5Small);
-            o.cache_dir = self.dir.join("model");
-            o.show_download_progress = false;
-            o.max_length = 64;
-            o.intra_threads = Some(threads);
-            *m = Some(fastembed::TextEmbedding::try_new(o).map_err(|e| format!("модель не загрузилась: {e}"))?);
+            *m = Some(engine::load(&self.dir.join("model"), threads)?);
         }
         Ok(())
     }
@@ -190,13 +185,20 @@ impl Semantic {
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         let mut m = self.model.lock().unwrap();
         let model = m.as_mut().ok_or("модель не загружена")?;
-        model.embed(texts, Some(texts.len().max(1))).map_err(|e| e.to_string())
+        engine::embed(model, texts)
     }
 
     /// Фоновая работа: кандидаты всех источников → отпечатки для новых имён.
     pub fn run(self: Arc<Self>, app: AppHandle, st: Arc<AppState>) {
         std::thread::spawn(move || {
             // дать программе спокойно запуститься
+            if !engine::SUPPORTED {
+                self.set_status(&app, |s| {
+                    s.state = "error".into();
+                    s.error = "на Mac с процессором Intel пока недоступен".into();
+                });
+                return;
+            }
             std::thread::sleep(Duration::from_secs(60));
             filecat_core::throttle::enter_background_mode();
             let mut seen_gen = u64::MAX;
@@ -378,6 +380,41 @@ impl Semantic {
             return vec![];
         }
         s.ids.par_iter().enumerate().filter_map(|(i, row)| rows.get(row).map(|sc| (i as u32, *sc))).collect()
+    }
+}
+
+/// Модель: multilingual-e5-small через ONNX Runtime. Для Mac на Intel у ONNX Runtime
+/// нет готовых библиотек — там поиск по смыслу пока выключен.
+#[cfg(not(all(target_os = "macos", target_arch = "x86_64")))]
+mod engine {
+    pub const SUPPORTED: bool = true;
+    pub type Model = fastembed::TextEmbedding;
+
+    pub fn load(cache: &std::path::Path, threads: usize) -> Result<Model, String> {
+        let mut o = fastembed::TextInitOptions::new(fastembed::EmbeddingModel::MultilingualE5Small);
+        o.cache_dir = cache.to_path_buf();
+        o.show_download_progress = false;
+        o.max_length = 64;
+        o.intra_threads = Some(threads);
+        fastembed::TextEmbedding::try_new(o).map_err(|e| format!("модель не загрузилась: {e}"))
+    }
+
+    pub fn embed(m: &mut Model, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        m.embed(texts, Some(texts.len().max(1))).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+mod engine {
+    pub const SUPPORTED: bool = false;
+    pub struct Model;
+
+    pub fn load(_: &std::path::Path, _: usize) -> Result<Model, String> {
+        Err("на Mac с процессором Intel поиск по смыслу пока недоступен".into())
+    }
+
+    pub fn embed(_: &mut Model, _: &[String]) -> Result<Vec<Vec<f32>>, String> {
+        Err("на Mac с процессором Intel поиск по смыслу пока недоступен".into())
     }
 }
 
