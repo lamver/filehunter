@@ -26,6 +26,9 @@ iroh-mdns-address-lookup = "*"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
 rand = "0.9"
 blake3 = "1.5"
+rayon = "1.10"
+# поиск по смыслу: multilingual-e5-small через ONNX Runtime (собирается в exe), на процессоре
+fastembed = { version = "=7.1.0", default-features = false, features = ["hf-hub-rustls-tls", "ort-download-binaries-rustls-tls"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Credentials"] }

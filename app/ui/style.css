@@ -474,3 +474,7 @@ svg { display: block; width: 100%; height: 100%; }
 .dup-head .ico { flex: none; }
 .brow.dup .name { padding-left: 4px; }
 #b-foot button { padding: 0 8px; font-size: 12px; margin-left: 6px; }
+
+/* найденное по смыслу */
+.sem-head { padding: 10px 12px 4px; margin-top: 6px; border-top: 1px solid var(--border); font-size: 13px; font-weight: 600; }
+.sem-head .muted { font-weight: 400; font-size: 12px; }

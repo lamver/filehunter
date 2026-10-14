@@ -163,6 +163,7 @@ pub async fn sync_peer(app: &AppHandle, st: &Arc<AppState>, p2p: &P2p, peer: &st
         changed = true;
     }
     if changed {
+        st.semantic.poke();
         let _ = app.emit("replicas-changed", ());
     }
     Ok(())

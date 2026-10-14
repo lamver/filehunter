@@ -517,6 +517,32 @@ $('#b-q').addEventListener('blur', () => { $('#omni-drop').classList.add('hidden
 
 // ---------- поиск по имени в открытой папке и вложенных ----------
 const Fz = { query: '', data: null, timer: null, seq: 0, everywhere: false };
+// поиск по смыслу: off — ещё ничего не посчитано, download, indexing, ready, error
+const Sem = { state: 'off', done: 0, total: 0, error: '' };
+const semText = () => Sem.state === 'download' ? 'скачиваю модель (около 470 МБ, один раз)…'
+  : Sem.state === 'indexing' ? `считаю отпечатки имён: ${Sem.total ? Math.floor((Sem.done / Sem.total) * 100) : 0}% (${fmtNum(Sem.done)} из ${fmtNum(Sem.total)})`
+  : Sem.state === 'ready' ? `готов: ${fmtNum(Sem.done)} имён`
+  : Sem.state === 'error' ? `ошибка: ${Sem.error}` : 'начнёт готовиться через минуту после запуска';
+invoke('semantic_status').then((x) => Object.assign(Sem, x)).catch(() => {});
+listen('semantic-status', ({ payload }) => {
+  Object.assign(Sem, payload);
+  if ($('#a-sem')) $('#a-sem').textContent = semText();
+  if (Fz.query && Fz.data && !Fz.data.dups) renderBrowse();
+});
+
+// по смыслу — дополнением к найденному по имени, без повторов
+async function semFind(q, my) {
+  if (Sem.state === 'off' || !Sem.done) return;
+  const s = curSource();
+  if (!Fz.everywhere && (!s || s.peer || s.seg == null || Bz.live)) return;
+  try {
+    const r = await invoke('semantic_search', { query: q, all: Fz.everywhere, seg: Fz.everywhere ? null : s.seg, dir: Fz.everywhere ? null : Bz.dir ?? null });
+    if (my !== Fz.seq || !Fz.data || Fz.data.dups) return;
+    const have = new Set(Fz.data.items.map((it) => itemPath(it).toLowerCase()));
+    Fz.data.sem = r.items.filter((it) => !have.has(it.full.toLowerCase()));
+    renderBrowse();
+  } catch (e) { devLog(`по смыслу: ${e}`); }
+}
 try { Fz.everywhere = localStorage.getItem('filecat.searchAll') === '1'; } catch { /* недоступно */ }
 function setEverywhere(on) {
   Fz.everywhere = on;
@@ -561,6 +587,7 @@ async function runFind() {
   $('#b-list').scrollTop = 0;
   renderBrowse();
   tabCapture();
+  semFind(q, my);
 }
 // Везде: все источники этого компьютера одним запросом и, параллельно, подключённые
 // компьютеры — каждый ищет у себя по тому, что открыл. Строки знают свой полный путь.
@@ -839,16 +866,18 @@ function renderBrowse() {
   const src = finding ? Fz.data.items : Bz.data.items;
   // папки всегда сверху, как в Проводнике
   Bz.rows = src.slice().sort((a, b) => (b.is_dir - a.is_dir) || d * cmp(k(a), k(b)) || cmp(a.name.toLowerCase(), b.name.toLowerCase()));
+  const byName = Bz.rows.length;
+  if (finding && Fz.data.sem?.length) Bz.rows = Bz.rows.concat(Fz.data.sem);
   restoreSel();
   const rows = Bz.rows.slice(0, Bz.shown);
   $('#b-list').innerHTML = rows.length
-    ? rows.map((it, i) => `<div class="brow item${Bz.sels.has(i) || (!Bz.sels.size && i === Bz.sel) ? ' sel' : ''}${it.hidden ? ' hid' : ''}" data-i="${i}">
+    ? rows.map((it, i) => `${i === byName ? `<div class="sem-head">Похоже по смыслу <span class="muted">— найдено не по буквам, а по значению имени</span></div>` : ''}<div class="brow item${it.score != null ? ' sem' : ''}${Bz.sels.has(i) || (!Bz.sels.size && i === Bz.sel) ? ' sel' : ''}${it.hidden ? ' hid' : ''}" data-i="${i}">
         <span class="ico ${it.is_dir ? 'dir' : ''}">${it.is_dir ? ICON.folder : ICON.file}</span>
         <span class="name" title="${esc(it.place ? joinPath(it.place, it.name) : it.name)}">${esc(it.name)}${it.place ? ` <small class="place">${esc(it.place)}</small>` : ''}</span>
         <span class="muted">${it.mtime ? fmtDate(it.mtime) : ''}</span>
         <span class="muted">${typeOf(it)}</span>
         <span class="num">${it.is_dir && Bz.live ? '' : fmtSize(it.size)}</span>
-        <span class="num muted"${wide ? ` title="${esc(it.source || '')}"` : ''}>${wide ? esc(it.source || '') : it.is_dir && !Bz.live ? fmtNum(it.files) : ''}</span></div>`).join('') +
+        <span class="num muted"${wide || it.score != null ? ` title="${esc(it.source || '')}"` : ''}>${wide || it.score != null ? esc(it.source || '') : it.is_dir && !Bz.live ? fmtNum(it.files) : ''}</span></div>`).join('') +
       (Bz.rows.length > Bz.shown ? `<div class="more"><button id="b-more">Показать ещё (${fmtNum(Bz.rows.length - Bz.shown)})</button></div>` : '')
     : `<p class="more muted">${finding ? 'Ничего не найдено.' : 'Папка пуста.'}</p>`;
   $('#b-more')?.addEventListener('click', () => { Bz.shown += 3000; renderBrowse(); });
@@ -860,7 +889,8 @@ function renderBrowse() {
       ? ` · везде: диски, S3 и подключённые компьютеры · ${f.ms.toFixed(0)} мс${f.failed?.length ? ` · не ответили: ${esc(f.failed.join(', '))}` : ''}${f.error ? ` · ${esc(f.error)}` : ''}`
       : f.onlyHere ? ' · только в этой папке: источник ещё индексируется' : ` · в «${esc(folderLabel())}» и вложенных · ${f.ms.toFixed(0)} мс`;
     const btn = f.everywhere ? `<button data-scope="here">искать только в «${esc(folderLabel() || 'этой папке')}»</button>` : '<button data-scope="all">искать везде</button>';
-    $('#b-foot').innerHTML = `Найдено: ${fmtNum(f.total)}${shown}${where} ${btn}`;
+    const sem = f.sem?.length ? ` · по смыслу: ${fmtNum(f.sem.length)}` : Sem.state === 'indexing' || Sem.state === 'download' ? ` · поиск по смыслу готовится: ${esc(semText())}` : '';
+    $('#b-foot').innerHTML = `Найдено: ${fmtNum(f.total)}${shown}${sem}${where} ${btn}`;
     return;
   }
   const dirs = Bz.data.items.filter((x) => x.is_dir).length;
@@ -1323,6 +1353,7 @@ async function loadAbout() {
   $('#a-version').textContent = a.version;
   $('#a-data').textContent = a.data_dir;
   $("#a-index").textContent = `записей: ${fmtNum(a.entries)} · источников: ${a.sources} · файл индекса ${fmtSize(a.index_bytes)}`;
+  $('#a-sem').textContent = semText();
 }
 $('#a-open').addEventListener('click', () => call('open_path', { path: $('#a-data').textContent }));
 $('#a-repo').addEventListener('click', (e) => { e.preventDefault(); call('open_repo'); });

@@ -7,6 +7,7 @@ mod fsops;
 mod jobs;
 mod p2p;
 mod replica;
+mod semantic;
 mod update;
 mod watch;
 
@@ -69,6 +70,8 @@ struct AppState {
     p2p: std::sync::OnceLock<Arc<p2p::P2p>>,
     /// Почему связь не запустилась (пусто — всё в порядке или ещё запускается).
     p2p_error: Mutex<String>,
+    /// Поиск по смыслу: отпечатки имён и фоновая работа над ними.
+    semantic: Arc<semantic::Semantic>,
     /// Копии индекса других компьютеров (то, что они нам открыли).
     replicas: RwLock<HashMap<String, replica::PeerReplica>>,
     /// Идущий поиск дубликатов (флаг остановки).
@@ -589,6 +592,9 @@ struct AllItemDto {
     peer: Option<String>,
     /// Копия снята тогда-то (секунды Unix); у своих — 0.
     asof: i64,
+    /// Найдено по смыслу: сходство 0…1.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    score: Option<f32>,
 }
 
 #[derive(Serialize)]
@@ -670,6 +676,7 @@ fn search_all(st: State<Shared>, query: String) -> CmdResult<AllFoundDto> {
                 cloud: s.is_remote(),
                 peer: None,
                 asof: 0,
+                score: None,
             }
         })
         .collect::<Vec<_>>();
@@ -711,12 +718,115 @@ fn search_all(st: State<Shared>, query: String) -> CmdResult<AllFoundDto> {
                     cloud: s.is_remote(),
                     peer: Some(peer.clone()),
                     asof: m.fetched,
+                    score: None,
                 });
             }
         }
     }
     items.truncate(LIMIT * 2);
     Ok(AllFoundDto { items, total, ms: t.elapsed().as_secs_f64() * 1000.0, covered })
+}
+
+/// Запись `i` внутри папки `dir` сегмента.
+fn inside_dir(seg: &filecat_core::index::Segment, mut i: u32, dir: u32) -> bool {
+    loop {
+        let p = seg.entries[i as usize].parent;
+        if p == dir {
+            return true;
+        }
+        if p == filecat_core::index::NO_PARENT {
+            return false;
+        }
+        i = p;
+    }
+}
+
+#[derive(Serialize)]
+struct SemanticDto {
+    items: Vec<AllItemDto>,
+    ms: f64,
+}
+
+/// Поиск по смыслу: везде (`all`) или в папке `dir` источника `seg` и вложенных.
+#[tauri::command(async)]
+fn semantic_search(st: State<Shared>, query: String, all: bool, seg: Option<u16>, dir: Option<u32>) -> CmdResult<SemanticDto> {
+    const LIMIT: usize = 300;
+    let t = Instant::now();
+    let near = st.semantic.nearest(&query, 400)?;
+    if near.is_empty() {
+        return Ok(SemanticDto { items: vec![], ms: t.elapsed().as_secs_f64() * 1000.0 });
+    }
+    let rows: HashMap<u32, f32> = near.into_iter().collect();
+    let prefs = load_prefs(&st);
+    let mut items: Vec<AllItemDto> = Vec::new();
+    let item = |s: &filecat_core::index::Segment, si: u16, i: u32, score: f32, source: String, peer: Option<String>, asof: i64, totals: &Option<(Vec<u64>, Vec<u32>)>| {
+        let e = &s.entries[i as usize];
+        let (size, files) = match (totals, e.is_dir()) {
+            (Some((sz, ct)), true) => (sz[i as usize], ct[i as usize]),
+            _ => (e.size, 1),
+        };
+        AllItemDto {
+            seg: si,
+            idx: i,
+            name: s.name(i).to_string(),
+            full: s.path(i).to_string_lossy().into_owned(),
+            place: s.parent_path(i).to_string_lossy().into_owned(),
+            is_dir: e.is_dir(),
+            size,
+            files,
+            mtime: e.mtime,
+            hidden: e.flags & (filecat_core::index::flags::HIDDEN | filecat_core::index::flags::SYSTEM) != 0,
+            source,
+            cloud: s.is_remote(),
+            peer,
+            asof,
+            score: Some(score),
+        }
+    };
+    {
+        let idx = st.index.read().unwrap();
+        for (si, s) in idx.segments.iter().enumerate() {
+            if !all && seg != Some(si as u16) {
+                continue;
+            }
+            let hits: Vec<(u32, f32)> = st
+                .semantic
+                .entries_of(&s.info.root.to_lowercase(), &rows, (s.info.scanned_at, s.entries.len()))
+                .into_iter()
+                .filter(|&(i, _)| !s.entries[i as usize].is_deleted() && (all || dir.is_none_or(|d| inside_dir(s, i, d))))
+                .collect();
+            if hits.is_empty() {
+                continue;
+            }
+            let totals = hits.iter().any(|&(i, _)| s.entries[i as usize].is_dir()).then(|| s.subtree_totals());
+            let title = source_title(&st, &prefs, &s.info.root);
+            items.extend(hits.into_iter().map(|(i, sc)| item(s, si as u16, i, sc, title.clone(), None, 0, &totals)));
+        }
+    }
+    if all {
+        let reps = st.replicas.read().unwrap();
+        for (peer, r) in reps.iter() {
+            let name = st.p2p.get().map(|p| p.peer_name(peer)).unwrap_or_default();
+            for (si, (s, m)) in r.index.segments.iter().zip(&r.meta).enumerate() {
+                let hits = st.semantic.entries_of(&semantic::replica_key(peer, &m.root), &rows, (m.fetched, s.entries.len()));
+                if hits.is_empty() {
+                    continue;
+                }
+                let totals = hits.iter().any(|&(i, _)| s.entries[i as usize].is_dir()).then(|| s.subtree_totals());
+                let title = m.root.trim_end_matches(['\\', '/']).rsplit(['\\', '/']).next().unwrap_or(&m.root).to_string();
+                items.extend(hits.into_iter().map(|(i, sc)| item(s, si as u16, i, sc, format!("{name} · {title}"), Some(peer.clone()), m.fetched, &totals)));
+            }
+        }
+    }
+    items.sort_by(|a, b| b.score.unwrap_or(0.0).total_cmp(&a.score.unwrap_or(0.0)));
+    items.truncate(LIMIT);
+    Ok(SemanticDto { items, ms: t.elapsed().as_secs_f64() * 1000.0 })
+}
+
+/// Как идёт подготовка поиска по смыслу.
+#[tauri::command]
+fn semantic_status(st: State<Shared>) -> semantic::Status {
+    st.semantic.status.lock().unwrap().clone()
 }
 
 /// Сверяет открытую папку с тем, что реально лежит на диске или в S3 (одно чтение папки),
@@ -2211,6 +2321,7 @@ fn data_dir() -> PathBuf {
 
 fn main() {
     let data_dir = data_dir();
+    let semantic = semantic::Semantic::new(&data_dir);
     let index_path = data_dir.join("index.bin");
     let index = Index::load(&index_path).unwrap_or_default();
     let dupes = load_dupes(&data_dir.join("dupes.json"), &index);
@@ -2240,6 +2351,7 @@ fn main() {
         jobs: std::sync::OnceLock::new(),
         dup_run: Mutex::new(None),
         replicas: RwLock::new(HashMap::new()),
+        semantic,
         etags: Mutex::new(HashMap::new()),
     });
 
@@ -2308,6 +2420,8 @@ fn main() {
             preview,
             search_folder,
             search_all,
+            semantic_search,
+            semantic_status,
             dup_search,
             dup_sizes,
             dev_log,
@@ -2374,6 +2488,8 @@ fn main() {
                 });
             }
             let _ = st.jobs.set(jobs::Jobs::start(app.handle().clone(), &st));
+            // поиск по смыслу: отпечатки имён считаются в фоне
+            st.semantic.clone().run(app.handle().clone(), st.clone());
             *st.drives.lock().unwrap() = drives::load(&st);
             drives::start(app.handle().clone(), st.clone());
             // для дисков, просканированных раньше, запоминаем текущий том как проиндексированный
