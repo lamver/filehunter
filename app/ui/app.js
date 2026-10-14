@@ -516,7 +516,13 @@ $('#b-q').addEventListener('focus', renderDrop);
 $('#b-q').addEventListener('blur', () => { $('#omni-drop').classList.add('hidden'); endEdit(); });
 
 // ---------- поиск по имени в открытой папке и вложенных ----------
-const Fz = { query: '', data: null, timer: null, seq: 0 };
+const Fz = { query: '', data: null, timer: null, seq: 0, everywhere: false };
+try { Fz.everywhere = localStorage.getItem('filecat.searchAll') === '1'; } catch { /* недоступно */ }
+function setEverywhere(on) {
+  Fz.everywhere = on;
+  try { localStorage.setItem('filecat.searchAll', on ? '1' : '0'); } catch { /* недоступно */ }
+  runFind();
+}
 const folderLabel = () => { const p = crumbParts(); return p.length ? p[p.length - 1].label : ''; };
 
 function clearQuery() {
@@ -534,7 +540,11 @@ async function runFind() {
   dupStop();
   const s = curSource();
   const my = ++Fz.seq;
-  if (Bz.live || !s || s.seg == null) {
+  if (Fz.everywhere) {
+    const r = await searchEverywhere(q);
+    if (my !== Fz.seq) return;
+    Fz.data = r;
+  } else if (Bz.live || !s || s.seg == null) {
     // источник ещё не в индексе — ищем только среди того, что видно в папке
     const words = q.toLowerCase().split(/\s+/).filter((w) => w && !w.includes(':'));
     const items = Bz.data.items.filter((it) => words.every((w) => it.name.toLowerCase().includes(w)));
@@ -552,6 +562,36 @@ async function runFind() {
   renderBrowse();
   tabCapture();
 }
+// Везде: все источники этого компьютера одним запросом и, параллельно, подключённые
+// компьютеры — каждый ищет у себя по тому, что открыл. Строки знают свой полный путь.
+async function searchEverywhere(q) {
+  const t = performance.now();
+  const local = invoke('search_all', { query: q }).catch((e) => ({ items: [], total: 0, error: String(e) }));
+  const peers = Bz.sources.filter((x) => x.peer && x.online && x.seg != null).map(async (x) => {
+    try {
+      const r = await api('search_folder', { seg: x.seg, dir: null, query: q }, x);
+      const root = x.root.replace(/[\\/]+$/, '');
+      const sep = sepOf(x.root);
+      return {
+        total: r.total,
+        items: r.items.map((it) => {
+          const place = it.place ? root + sep + it.place : x.root;
+          return { ...it, seg: x.seg, peer: x.peer, full: joinPath(place, it.name), place, source: `${x.peerName} · ${x.title}` };
+        }),
+      };
+    } catch { return { items: [], total: 0, failed: x.peerName }; }
+  });
+  const parts = [await local, ...(await Promise.all(peers))];
+  return {
+    everywhere: true,
+    items: parts.flatMap((p) => p.items),
+    total: parts.reduce((a, p) => a + (p.total || 0), 0),
+    ms: performance.now() - t,
+    failed: [...new Set(parts.filter((p) => p.failed).map((p) => p.failed))],
+    error: parts[0].error || '',
+  };
+}
+
 $('#b-q').addEventListener('input', () => {
   renderDrop();
   clearTimeout(Fz.timer);
@@ -745,6 +785,8 @@ function renderDups() {
   $('#b-foot').innerHTML = `${text} ${switches}`;
 }
 $('#b-foot').addEventListener('click', (e) => {
+  const sc = e.target.closest('[data-scope]');
+  if (sc) { setEverywhere(sc.dataset.scope === 'all'); return; }
   const b = e.target.closest('[data-dup]');
   if (!b) return;
   if (b.dataset.dup === 'stop') { invoke('dup_stop').catch(() => {}); return; }
@@ -776,7 +818,6 @@ const bKey = {
 
 function renderBrowse() {
   if (Fz.query && Fz.data?.dups) { renderDups(); return; }
-  $('#b-head [data-bsort="files"]').textContent = 'Файлов';
   $$('#b-head [data-bsort]').forEach((b) => {
     const on = b.dataset.bsort === Bz.sort.by;
     b.classList.toggle('sorted', on);
@@ -784,6 +825,8 @@ function renderBrowse() {
   });
   const k = bKey[Bz.sort.by], d = Bz.sort.desc ? -1 : 1;
   const finding = !!(Fz.query && Fz.data);
+  const wide = finding && Fz.data.everywhere;
+  $('#b-head [data-bsort="files"]').textContent = wide ? 'Где' : 'Файлов';
   const src = finding ? Fz.data.items : Bz.data.items;
   // папки всегда сверху, как в Проводнике
   Bz.rows = src.slice().sort((a, b) => (b.is_dir - a.is_dir) || d * cmp(k(a), k(b)) || cmp(a.name.toLowerCase(), b.name.toLowerCase()));
@@ -796,15 +839,19 @@ function renderBrowse() {
         <span class="muted">${it.mtime ? fmtDate(it.mtime) : ''}</span>
         <span class="muted">${typeOf(it)}</span>
         <span class="num">${it.is_dir && Bz.live ? '' : fmtSize(it.size)}</span>
-        <span class="num muted">${it.is_dir && !Bz.live ? fmtNum(it.files) : ''}</span></div>`).join('') +
+        <span class="num muted"${wide ? ` title="${esc(it.source || '')}"` : ''}>${wide ? esc(it.source || '') : it.is_dir && !Bz.live ? fmtNum(it.files) : ''}</span></div>`).join('') +
       (Bz.rows.length > Bz.shown ? `<div class="more"><button id="b-more">Показать ещё (${fmtNum(Bz.rows.length - Bz.shown)})</button></div>` : '')
     : `<p class="more muted">${finding ? 'Ничего не найдено.' : 'Папка пуста.'}</p>`;
   $('#b-more')?.addEventListener('click', () => { Bz.shown += 3000; renderBrowse(); });
   const s = curSource();
   if (finding) {
     const f = Fz.data;
-    $('#b-foot').textContent = `Найдено: ${fmtNum(f.total)}` + (f.total > f.items.length ? ` · показаны первые ${fmtNum(f.items.length)}` : '') +
-      (f.onlyHere ? ` · только в этой папке: источник ещё индексируется` : ` · в «${folderLabel()}» и вложенных · ${f.ms.toFixed(0)} мс`);
+    const shown = f.total > f.items.length ? ` · показаны первые ${fmtNum(f.items.length)}` : '';
+    const where = f.everywhere
+      ? ` · везде: диски, S3 и подключённые компьютеры · ${f.ms.toFixed(0)} мс${f.failed?.length ? ` · не ответили: ${esc(f.failed.join(', '))}` : ''}${f.error ? ` · ${esc(f.error)}` : ''}`
+      : f.onlyHere ? ' · только в этой папке: источник ещё индексируется' : ` · в «${esc(folderLabel())}» и вложенных · ${f.ms.toFixed(0)} мс`;
+    const btn = f.everywhere ? `<button data-scope="here">искать только в «${esc(folderLabel() || 'этой папке')}»</button>` : '<button data-scope="all">искать везде</button>';
+    $('#b-foot').innerHTML = `Найдено: ${fmtNum(f.total)}${shown}${where} ${btn}`;
     return;
   }
   const dirs = Bz.data.items.filter((x) => x.is_dir).length;
@@ -828,9 +875,10 @@ $$('#b-head [data-bsort]').forEach((b) => b.addEventListener('click', () => {
 async function openFile(it) {
   const s = curSource();
   const path = itemPath(it);
-  if (!s.peer || it.full) { call('open_path', { path }); return; }
+  const peer = it.full ? it.peer : s.peer;
+  if (!peer) { call('open_path', { path }); return; }
   toast(`Скачиваю ${it.name}…`, 60000);
-  try { await invoke('peer_open', { peer: s.peer, path }); toast(`Открыт: ${it.name}`); } catch (e) { toast(String(e), 8000); }
+  try { await invoke('peer_open', { peer, path }); toast(`Открыт: ${it.name}`); } catch (e) { toast(String(e), 8000); }
 }
 async function downloadFile(it) {
   const dir = await window.__TAURI__.dialog.open({ directory: true, title: 'Куда сохранить' });
@@ -885,7 +933,7 @@ function renderDetails() {
   const it = Bz.rows[Bz.sel];
   const box = $('#b-details');
   // у найденных дубликатов свой источник: другой диск или S3
-  const s = it?.full ? Bz.sources.find((x) => !x.peer && x.seg === it.seg) || curSource() : curSource();
+  const s = it?.full ? Bz.sources.find((x) => (x.peer || null) === (it.peer || null) && x.seg === it.seg) || curSource() : curSource();
   // панель видна, только когда что-то выбрано
   $('.b-body').classList.toggle('with-details', !!(it && Bz.data && s));
   if (!it || !Bz.data || !s) { box.innerHTML = ''; return; }
@@ -959,7 +1007,7 @@ function activate(i) {
   const it = Bz.rows[i];
   if (!it) return;
   if (Fz.query) pushQuery(Fz.query);
-  if (it.is_dir && it.full) { clearQuery(); goPath(it.full, null); return; }
+  if (it.is_dir && it.full) { clearQuery(); goPath(it.full, it.peer || null); return; }
   if (it.is_dir) Bz.live ? openLive(itemPath(it)) : openDir(it.idx);
   else if (Fz.query && it.place != null && Bz.data.remote) goPath(joinPath(Bz.data.path, it.place));
   else if (!Bz.data.remote) openFile(it);
@@ -1447,7 +1495,7 @@ function selectedItems() {
   return idx.sort((a, b) => a - b).map((i) => Bz.rows[i]).filter(Boolean);
 }
 // место в задаче: путь + устройство
-const locOf = (it) => ({ peer: it.full ? null : curSource()?.peer || null, path: itemPath(it) });
+const locOf = (it) => ({ peer: it.full ? it.peer || null : curSource()?.peer || null, path: itemPath(it) });
 const hereLoc = () => (Bz.data ? { peer: curSource()?.peer || null, path: Bz.data.path } : null);
 
 // ---------- буфер: копировать / вырезать / вставить (между вкладками и компьютерами тоже) ----------
@@ -1480,7 +1528,8 @@ async function deleteSelected(forever) {
   if (!items.length) return;
   const s = curSource();
   const cloud = items.some((it) => itemPath(it).startsWith('s3://'));
-  const where = s.peer && !items[0].full ? ` на компьютере «${s.peerName}»` : '';
+  const peerOf = items[0].full ? items[0].peer : s.peer;
+  const where = peerOf ? ` на компьютере «${Pz.info.peers.find((p) => p.id === peerOf)?.name || s.peerName || 'другом'}»` : '';
   const bytes = items.reduce((a, it) => a + (it.size || 0), 0);
   // у дубликатов имена одинаковые — показываем, какие именно копии
   const what = items[0].full

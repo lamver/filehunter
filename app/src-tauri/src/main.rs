@@ -558,6 +558,107 @@ fn search_folder(st: State<Shared>, seg: u16, dir: Option<u32>, query: String) -
     Ok(FoundDto { items, total, ms: t.elapsed().as_secs_f64() * 1000.0 })
 }
 
+/// Найденное при поиске везде: полный путь и источник — строка открывается и
+/// удаляется, где бы она ни лежала.
+#[derive(Serialize)]
+struct AllItemDto {
+    seg: u16,
+    idx: u32,
+    name: String,
+    full: String,
+    /// Папка, где лежит (полный путь).
+    place: String,
+    is_dir: bool,
+    size: u64,
+    files: u32,
+    mtime: i64,
+    hidden: bool,
+    /// Название источника: «Локальный диск (C:)», «Rechka».
+    source: String,
+    cloud: bool,
+}
+
+#[derive(Serialize)]
+struct AllFoundDto {
+    items: Vec<AllItemDto>,
+    total: usize,
+    ms: f64,
+}
+
+/// Название источника без опроса дисков (быстро): имя, данное пользователем, метка тома, имя S3.
+fn source_title(st: &AppState, prefs: &SourcePrefs, root: &str) -> String {
+    if let Some(a) = prefs.aliases.get(root) {
+        return a.clone();
+    }
+    if let Some(name) = root.strip_prefix("s3://") {
+        return name.trim_end_matches('/').to_string();
+    }
+    let d = st.drives.lock().unwrap();
+    d.now
+        .iter()
+        .find(|v| v.root.eq_ignore_ascii_case(root))
+        .map(|v| v.title())
+        .or_else(|| d.known.get(root).map(|k| k.title.clone()))
+        .unwrap_or_else(|| root.to_string())
+}
+
+/// Поиск по имени сразу во всех источниках этого компьютера (диски, папки, S3).
+/// Другие компьютеры интерфейс спрашивает сам, параллельно, и смешивает с этим.
+#[tauri::command(async)]
+fn search_all(st: State<Shared>, query: String) -> CmdResult<AllFoundDto> {
+    const LIMIT: usize = 5000;
+    let q = Query::parse(&query).map_err(err)?;
+    let t = Instant::now();
+    let prefs = load_prefs(&st);
+    let idx = st.index.read().unwrap();
+    let mut hits: Vec<(u16, u32)> = Vec::new();
+    let mut total = 0;
+    for (si, s) in idx.segments.iter().enumerate() {
+        if prefs.hidden.iter().any(|h| h.eq_ignore_ascii_case(&s.info.root)) {
+            continue;
+        }
+        let (h, n) = search_in(&idx, si as u16, None, &q, LIMIT);
+        total += n;
+        hits.extend(h.into_iter().map(|i| (si as u16, i)));
+    }
+    // как в одной папке: папки первыми, дальше по имени
+    hits.sort_by(|&(sa, a), &(sb, b)| {
+        let (x, y) = (&idx.segments[sa as usize], &idx.segments[sb as usize]);
+        y.entries[b as usize].is_dir().cmp(&x.entries[a as usize].is_dir()).then_with(|| x.lower(a).cmp(y.lower(b)))
+    });
+    hits.truncate(LIMIT);
+    let mut titles: HashMap<u16, String> = HashMap::new();
+    let mut totals: HashMap<u16, Arc<HashMap<u32, (u64, u32)>>> = HashMap::new();
+    let items = hits
+        .into_iter()
+        .map(|(si, i)| {
+            let s = &idx.segments[si as usize];
+            let e = &s.entries[i as usize];
+            let (size, files) = if e.is_dir() {
+                let t = totals.entry(si).or_insert_with(|| folder_totals(&st, &idx, si));
+                t.get(&i).copied().unwrap_or((0, 0))
+            } else {
+                (e.size, 1)
+            };
+            AllItemDto {
+                seg: si,
+                idx: i,
+                name: s.name(i).to_string(),
+                full: s.path(i).to_string_lossy().into_owned(),
+                place: s.parent_path(i).to_string_lossy().into_owned(),
+                is_dir: e.is_dir(),
+                size,
+                files,
+                mtime: e.mtime,
+                hidden: e.flags & (filecat_core::index::flags::HIDDEN | filecat_core::index::flags::SYSTEM) != 0,
+                source: titles.entry(si).or_insert_with(|| source_title(&st, &prefs, &s.info.root)).clone(),
+                cloud: s.is_remote(),
+            }
+        })
+        .collect();
+    Ok(AllFoundDto { items, total, ms: t.elapsed().as_secs_f64() * 1000.0 })
+}
+
 /// Сверяет открытую папку с тем, что реально лежит на диске или в S3 (одно чтение папки),
 /// и поправляет индекс: пропавшее убирает, новое добавляет. Так исправляются и изменения,
 /// сделанные, пока программа была закрыта. Возвращает число изменений.
@@ -2142,6 +2243,7 @@ fn main() {
             s3_refresh,
             preview,
             search_folder,
+            search_all,
             dup_search,
             dup_sizes,
             dev_log,
