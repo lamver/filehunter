@@ -88,6 +88,45 @@ function showView(name) {
 }
 $$('.tab').forEach((b) => b.addEventListener('click', () => showView(b.dataset.tab)));
 
+// ---------- меню программы: настройки и «О программе» ----------
+function menuOpen(on) {
+  $('#app-menu').classList.toggle('hidden', !on);
+  $('#menu-btn').setAttribute('aria-expanded', on ? 'true' : 'false');
+}
+$('#menu-btn').addEventListener('click', (e) => { e.stopPropagation(); menuOpen($('#app-menu').classList.contains('hidden')); });
+document.addEventListener('mousedown', (e) => { if (!e.target.closest('#app-menu, #menu-btn')) menuOpen(false); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') menuOpen(false); });
+$('#app-menu').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-menu]');
+  if (!b) return;
+  menuOpen(false);
+  if (b.dataset.menu === 'about') showView('about');
+  else if (b.dataset.menu === 'settings') settingsOpen();
+});
+function settingsOpen() {
+  $('#set-lang').innerHTML = LANGS.map((l) => `<option value="${l.id}"${l.id === LANG ? ' selected' : ''}>${l.name}</option>`).join('');
+  $('#set-theme').value = THEME;
+  $('#settings-modal').classList.remove('hidden');
+  $('#set-lang').focus();
+}
+const settingsClose = () => $('#settings-modal').classList.add('hidden');
+$('#set-lang').addEventListener('change', (e) => setLang(e.target.value));
+$('#set-theme').addEventListener('change', (e) => setTheme(e.target.value));
+$('#set-close').addEventListener('click', settingsClose);
+$('#settings-modal').addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); settingsClose(); } });
+// язык сменили — перерисовать всё, что собирается из кода
+window.addEventListener('langchange', () => {
+  invoke('set_lang', { lang: LANG }).catch(() => {});
+  if (typeof renderTabs === 'function') renderTabs();
+  if (typeof renderSourceList === 'function' && Bz.sources) renderSourceList();
+  if (Bz.data) { renderCrumbs(); renderBrowse(); renderDetails(); }
+  if (typeof renderTasks === 'function') renderTasks();
+  refreshStatus();
+  if ($('#tab-about').classList.contains('active')) loadAbout();
+});
+applyI18n();
+invoke('set_lang', { lang: LANG }).catch(() => {});
+
 // ---------- статус ----------
 async function refreshStatus() {
   const s = await invoke('status');
@@ -1373,7 +1412,7 @@ async function updCheck(quiet) {
       $('#a-upd').textContent = 'Установить и перезапустить';
       $('#a-upd-notes').textContent = u.notes || '';
       $('#a-upd-notes').classList.toggle('hidden', !u.notes);
-      $('.tab[data-tab="about"]').classList.add('has-update');
+      $('#menu-btn').classList.add('has-update');
     } else if (!quiet) {
       updMsg(`У вас последняя версия (${u.current})`);
     }

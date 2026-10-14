@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -8,10 +8,17 @@
 </head>
 <body>
   <header class="topbar">
+    <!-- меню программы: настройки и «О программе» -->
+    <button id="menu-btn" class="menu-btn" data-i18n-title="menu.title" data-i18n-aria="menu.title" aria-haspopup="menu" aria-expanded="false">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M2.5 8h11M2.5 12h11" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </button>
+    <div id="app-menu" class="app-menu hidden" role="menu">
+      <button role="menuitem" data-menu="settings" data-i18n="menu.settings">Settings</button>
+      <button role="menuitem" data-menu="about" data-i18n="menu.about">About</button>
+    </div>
     <nav id="ftabs" class="ftabs" role="tablist" aria-label="Вкладки"></nav>
     <button id="ftab-new" class="ftab-new" title="Новая вкладка (Ctrl+T)" aria-label="Новая вкладка">+</button>
     <span class="spacer"></span>
-    <button class="tab" data-tab="about">О программе</button>
   </header>
 
   <main id="tab-sources" class="view active">
@@ -84,6 +91,21 @@
   </main>
 
   <!-- Окна — на уровне всего приложения: видны на любой вкладке. -->
+  <div id="settings-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="set-title">
+    <div class="modal-box m-form settings-box">
+      <h3 id="set-title" data-i18n="settings.title">Settings</h3>
+      <label class="set-row"><span data-i18n="settings.language">Language</span><select id="set-lang"></select></label>
+      <label class="set-row"><span data-i18n="settings.theme">Theme</span>
+        <select id="set-theme">
+          <option value="system" data-i18n="settings.theme.system">As in the system</option>
+          <option value="light" data-i18n="settings.theme.light">Light</option>
+          <option value="dark" data-i18n="settings.theme.dark">Dark</option>
+        </select>
+      </label>
+      <div class="m-actions"><button type="button" id="set-close" class="primary" data-i18n="settings.close">Close</button></div>
+    </div>
+  </div>
+
   <!-- Подтверждение. Стандартный confirm() в окне программы не ждёт ответа (Tauri подменяет
        его асинхронной версией), поэтому только своё окно. -->
   <div id="ask-modal" class="modal hidden" role="alertdialog" aria-modal="true" aria-labelledby="ask-text">
@@ -193,6 +215,7 @@
 
   <div id="ctx" class="ctx hidden" role="menu"></div>
   <div id="toast" class="toast hidden"></div>
+  <script src="i18n.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
