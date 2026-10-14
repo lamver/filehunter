@@ -62,104 +62,6 @@
       <div id="tasks-list" class="tasks-list"></div>
     </section>
 
-    <!-- Подтверждение. Стандартный confirm() в окне программы не ждёт ответа (Tauri подменяет
-         его асинхронной версией), поэтому только своё окно. -->
-    <div id="ask-modal" class="modal hidden" role="alertdialog" aria-modal="true" aria-labelledby="ask-text">
-      <div class="modal-box ask-box">
-        <div id="ask-text" class="ask-text"></div>
-        <div class="btns"><button type="button" id="ask-no">Отмена</button><button type="button" id="ask-yes">Да</button></div>
-      </div>
-    </div>
-
-    <!-- Что этот компьютер открывает сопряжённому устройству -->
-    <div id="share-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="share-title">
-      <div class="modal-box m-form">
-        <h3 id="share-title">Доступ к этому компьютеру</h3>
-        <p class="muted">Отмеченное будет видно на том компьютере. Проверка — здесь: он не получит ничего сверх этого.</p>
-        <div id="share-pick-edit" class="share-pick"></div>
-        <div class="btns"><button type="button" id="share-save" class="primary">Сохранить</button><button type="button" id="share-cancel">Отмена</button></div>
-      </div>
-    </div>
-
-    <!-- Загрузка по ссылке -->
-    <div id="dl-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="dl-title">
-      <form id="dl-form" class="modal-box m-form" autocomplete="off">
-        <h3 id="dl-title">Загрузить по ссылке</h3>
-        <p class="muted">Куда: <b id="dl-dest"></b></p>
-        <textarea id="dl-urls" rows="5" placeholder="https://… — по одной ссылке на строку" spellcheck="false"></textarea>
-        <p class="muted">Если связь оборвётся, загрузка продолжится с того же места (если сервер это поддерживает).</p>
-        <div class="btns"><button type="submit" class="primary">Загрузить</button><button type="button" id="dl-cancel">Отмена</button></div>
-      </form>
-    </div>
-
-    <!-- Добавление источника -->
-    <div id="add-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="m-title">
-      <div class="modal-box">
-        <header>
-          <button id="m-back" class="icon-btn hidden" aria-label="Назад">←</button>
-          <h3 id="m-title">Добавить источник</h3>
-          <span class="spacer"></span>
-          <button id="m-close" class="icon-btn" aria-label="Закрыть">✕</button>
-        </header>
-
-        <div id="m-types" class="types">
-          <button data-type="local"><b>Папка или диск</b><span>Локальная папка, флешка, подключённый сетевой диск</span></button>
-          <button data-type="s3"><b>S3</b><span>Amazon S3 и любое S3-совместимое хранилище</span></button>
-          <button data-type="peer"><b>Другой компьютер</b><span>Видеть его диски и подключения отсюда, а этот — оттуда</span></button>
-          <button data-type="webdav" disabled><b>WebDAV</b><span>Nextcloud, ownCloud, Яндекс Диск</span><i>скоро</i></button>
-          <button data-type="sftp" disabled><b>SFTP</b><span>Сервер по SSH</span><i>скоро</i></button>
-          <button data-type="smb" disabled><b>SMB</b><span>Сетевая папка Windows по адресу \\сервер\папка</span><i>скоро</i></button>
-          <button data-type="gdrive" disabled><b>Google Drive</b><span>Диск Google-аккаунта</span><i>скоро</i></button>
-        </div>
-
-        <form id="m-local" class="m-form hidden" autocomplete="off">
-          <label>Папка или диск
-            <span class="row"><input name="path" required placeholder="D:\Photos" /><button type="button" class="browse" data-browse="#m-local [name=path]">Обзор…</button></span>
-          </label>
-          <p class="muted">Папка будет просканирована и дальше будет обновляться сама, пока программа запущена.</p>
-          <div class="btns"><button type="submit" class="primary">Сканировать</button><span class="m-status muted"></span></div>
-        </form>
-
-        <div id="m-peer" class="m-form hidden">
-          <p class="muted">На втором компьютере тоже должен быть установлен и запущен FileHunter. Компьютеры могут быть в одной сети или в разных — через интернет соединение тоже установится. Всё передаётся зашифрованным.</p>
-          <div class="peer-box">
-            <h4>Открыть этот компьютер другому</h4>
-            <p class="muted">Отметьте, что будет видно на другом компьютере, создайте код и введите его там. Тот компьютер получит доступ к отмеченному здесь, а своё не откроет. Код подходит один раз и действует 10 минут.</p>
-            <div id="share-pick-invite" class="share-pick"></div>
-            <div class="row"><input id="peer-code-out" readonly placeholder="здесь появится код"><button type="button" id="peer-invite" class="primary">Создать код</button><button type="button" id="peer-copy" class="hidden">Копировать</button></div>
-            <span id="peer-wait" class="m-status muted"></span>
-          </div>
-          <div class="peer-box">
-            <h4>Подключиться по коду</h4>
-            <p class="muted">Вставьте код, созданный на другом компьютере. Вы увидите то, что там открыли; этот компьютер ему ничего не откроет — это можно сделать потом (правый клик по устройству → «Доступ к этому компьютеру…»).</p>
-            <form id="peer-join-form" class="row" autocomplete="off"><input id="peer-code-in" spellcheck="false" placeholder="FC1-…"><button type="submit" class="primary" id="peer-join">Подключить</button></form>
-            <span id="peer-join-status" class="m-status muted"></span>
-          </div>
-        </div>
-
-        <form id="s3-form" class="m-form hidden" autocomplete="off">
-          <p class="muted">Индексируется только список файлов — содержимое не скачивается. Secret Key хранится в диспетчере учётных данных Windows.</p>
-          <div class="grid">
-            <label>Название<input name="name" required placeholder="как будет называться в списке"></label>
-            <label>Бакет<input name="bucket" placeholder="my-bucket"></label>
-            <label>Endpoint<input name="endpoint" placeholder="адрес хранилища; пусто — Amazon S3"></label>
-            <label>Регион<input name="region" placeholder="пусто — us-east-1"></label>
-            <label>Папка в бакете<input name="prefix" placeholder="необязательно, например photos/2025"></label>
-            <span></span>
-            <label>Access Key ID<input name="access_key" spellcheck="false"></label>
-            <label>Secret Access Key
-              <span class="row"><input name="secret" type="password" spellcheck="false"><button type="button" id="s3-eye" title="Показать или скрыть ключ">Показать</button></span>
-            </label>
-          </div>
-          <div class="btns">
-            <button type="button" id="s3-test">Проверить подключение</button>
-            <button type="submit" class="primary" id="s3-save">Сохранить</button>
-            <button type="button" id="s3-cancel">Отмена</button>
-          </div>
-          <div id="s3-result" class="check hidden"><b></b><details><summary>Подробнее</summary><pre></pre></details></div>
-        </form>
-      </div>
-    </div>
   </main>
 
   <main id="tab-about" class="view">
@@ -179,6 +81,106 @@
       <p class="muted">© 2026 Valerij Frolov · лицензия FSL-1.1-MIT · <a href="#" id="a-repo">github.com/lamver/filehunter</a></p>
     </div>
   </main>
+
+  <!-- Окна — на уровне всего приложения: видны на любой вкладке. -->
+  <!-- Подтверждение. Стандартный confirm() в окне программы не ждёт ответа (Tauri подменяет
+       его асинхронной версией), поэтому только своё окно. -->
+  <div id="ask-modal" class="modal hidden" role="alertdialog" aria-modal="true" aria-labelledby="ask-text">
+    <div class="modal-box ask-box">
+      <div id="ask-text" class="ask-text"></div>
+      <div class="btns"><button type="button" id="ask-no">Отмена</button><button type="button" id="ask-yes">Да</button></div>
+    </div>
+  </div>
+
+  <!-- Что этот компьютер открывает сопряжённому устройству -->
+  <div id="share-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="share-title">
+    <div class="modal-box m-form">
+      <h3 id="share-title">Доступ к этому компьютеру</h3>
+      <p class="muted">Отмеченное будет видно на том компьютере. Проверка — здесь: он не получит ничего сверх этого.</p>
+      <div id="share-pick-edit" class="share-pick"></div>
+      <div class="btns"><button type="button" id="share-save" class="primary">Сохранить</button><button type="button" id="share-cancel">Отмена</button></div>
+    </div>
+  </div>
+
+  <!-- Загрузка по ссылке -->
+  <div id="dl-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="dl-title">
+    <form id="dl-form" class="modal-box m-form" autocomplete="off">
+      <h3 id="dl-title">Загрузить по ссылке</h3>
+      <p class="muted">Куда: <b id="dl-dest"></b></p>
+      <textarea id="dl-urls" rows="5" placeholder="https://… — по одной ссылке на строку" spellcheck="false"></textarea>
+      <p class="muted">Если связь оборвётся, загрузка продолжится с того же места (если сервер это поддерживает).</p>
+      <div class="btns"><button type="submit" class="primary">Загрузить</button><button type="button" id="dl-cancel">Отмена</button></div>
+    </form>
+  </div>
+
+  <!-- Добавление источника -->
+  <div id="add-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="m-title">
+    <div class="modal-box">
+      <header>
+        <button id="m-back" class="icon-btn hidden" aria-label="Назад">←</button>
+        <h3 id="m-title">Добавить источник</h3>
+        <span class="spacer"></span>
+        <button id="m-close" class="icon-btn" aria-label="Закрыть">✕</button>
+      </header>
+
+      <div id="m-types" class="types">
+        <button data-type="local"><b>Папка или диск</b><span>Локальная папка, флешка, подключённый сетевой диск</span></button>
+        <button data-type="s3"><b>S3</b><span>Amazon S3 и любое S3-совместимое хранилище</span></button>
+        <button data-type="peer"><b>Другой компьютер</b><span>Видеть его диски и подключения отсюда, а этот — оттуда</span></button>
+        <button data-type="webdav" disabled><b>WebDAV</b><span>Nextcloud, ownCloud, Яндекс Диск</span><i>скоро</i></button>
+        <button data-type="sftp" disabled><b>SFTP</b><span>Сервер по SSH</span><i>скоро</i></button>
+        <button data-type="smb" disabled><b>SMB</b><span>Сетевая папка Windows по адресу \\сервер\папка</span><i>скоро</i></button>
+        <button data-type="gdrive" disabled><b>Google Drive</b><span>Диск Google-аккаунта</span><i>скоро</i></button>
+      </div>
+
+      <form id="m-local" class="m-form hidden" autocomplete="off">
+        <label>Папка или диск
+          <span class="row"><input name="path" required placeholder="D:\Photos" /><button type="button" class="browse" data-browse="#m-local [name=path]">Обзор…</button></span>
+        </label>
+        <p class="muted">Папка будет просканирована и дальше будет обновляться сама, пока программа запущена.</p>
+        <div class="btns"><button type="submit" class="primary">Сканировать</button><span class="m-status muted"></span></div>
+      </form>
+
+      <div id="m-peer" class="m-form hidden">
+        <p class="muted">На втором компьютере тоже должен быть установлен и запущен FileHunter. Компьютеры могут быть в одной сети или в разных — через интернет соединение тоже установится. Всё передаётся зашифрованным.</p>
+        <div class="peer-box">
+          <h4>Открыть этот компьютер другому</h4>
+          <p class="muted">Отметьте, что будет видно на другом компьютере, создайте код и введите его там. Тот компьютер получит доступ к отмеченному здесь, а своё не откроет. Код подходит один раз и действует 10 минут.</p>
+          <div id="share-pick-invite" class="share-pick"></div>
+          <div class="row"><input id="peer-code-out" readonly placeholder="здесь появится код"><button type="button" id="peer-invite" class="primary">Создать код</button><button type="button" id="peer-copy" class="hidden">Копировать</button></div>
+          <span id="peer-wait" class="m-status muted"></span>
+        </div>
+        <div class="peer-box">
+          <h4>Подключиться по коду</h4>
+          <p class="muted">Вставьте код, созданный на другом компьютере. Вы увидите то, что там открыли; этот компьютер ему ничего не откроет — это можно сделать потом (правый клик по устройству → «Доступ к этому компьютеру…»).</p>
+          <form id="peer-join-form" class="row" autocomplete="off"><input id="peer-code-in" spellcheck="false" placeholder="FC1-…"><button type="submit" class="primary" id="peer-join">Подключить</button></form>
+          <span id="peer-join-status" class="m-status muted"></span>
+        </div>
+      </div>
+
+      <form id="s3-form" class="m-form hidden" autocomplete="off">
+        <p class="muted">Индексируется только список файлов — содержимое не скачивается. Secret Key хранится в диспетчере учётных данных Windows.</p>
+        <div class="grid">
+          <label>Название<input name="name" required placeholder="как будет называться в списке"></label>
+          <label>Бакет<input name="bucket" placeholder="my-bucket"></label>
+          <label>Endpoint<input name="endpoint" placeholder="адрес хранилища; пусто — Amazon S3"></label>
+          <label>Регион<input name="region" placeholder="пусто — us-east-1"></label>
+          <label>Папка в бакете<input name="prefix" placeholder="необязательно, например photos/2025"></label>
+          <span></span>
+          <label>Access Key ID<input name="access_key" spellcheck="false"></label>
+          <label>Secret Access Key
+            <span class="row"><input name="secret" type="password" spellcheck="false"><button type="button" id="s3-eye" title="Показать или скрыть ключ">Показать</button></span>
+          </label>
+        </div>
+        <div class="btns">
+          <button type="button" id="s3-test">Проверить подключение</button>
+          <button type="submit" class="primary" id="s3-save">Сохранить</button>
+          <button type="button" id="s3-cancel">Отмена</button>
+        </div>
+        <div id="s3-result" class="check hidden"><b></b><details><summary>Подробнее</summary><pre></pre></details></div>
+      </form>
+    </div>
+  </div>
 
   <footer class="statusbar">
     <button id="st-tasks" class="st-tasks" title="Показать или скрыть лог задач"></button>
