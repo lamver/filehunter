@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.6
+
+- Search by meaning: under the name matches a "Similar by meaning" block shows
+  folders and files whose names mean the same thing in any language: "games" finds
+  "GOG Games" and "Battlefield 6", "taxes" finds "НДФЛ_2023.pdf". Works in the open
+  folder and everywhere, including copies of other computers' index.
+- Covered: folders, documents, photos, video, audio, archives and design files, outside
+  system, cache and dependency folders. Meaningless camera names like IMG_0001 are
+  skipped.
+- Prepared in the background on the CPU with two low-priority threads, your own folders
+  first; the model (about 470 MB) downloads once. Progress is shown in About.
+
 ## 0.1.5
 
 - Copies of other computers' index: what a connected computer opened to you is kept
