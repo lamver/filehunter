@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.5
+
+- Copies of other computers' index: what a connected computer opened to you is kept
+  here and refreshed when it changes. Search everywhere uses these copies, so results
+  from other computers appear instantly and even when they are switched off ("as of"
+  the copy date). Closing access or removing a computer deletes its copy.
+  Both computers need 0.1.5 or later; with older versions search asks over the network.
+
 ## 0.1.4
 
 - Search everywhere: a switch under the results ("search everywhere" / "only in this
