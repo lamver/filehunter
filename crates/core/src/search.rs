@@ -77,7 +77,7 @@ impl Query {
                         out.kind = match val {
                             "file" | "f" => Some(Kind::File),
                             "dir" | "d" | "folder" => Some(Kind::Dir),
-                            _ => bail!("type: file или dir"),
+                            _ => bail!(crate::lang::tr("type: file or dir", "type: file или dir").to_string()),
                         };
                         continue;
                     }
@@ -145,7 +145,7 @@ impl Query {
 }
 
 fn parse_size_filter(val: &str, q: &mut Query) -> Result<()> {
-    let bad = || anyhow::anyhow!("size: ожидается >10mb, <1g или 10mb..1gb");
+    let bad = || anyhow::Error::msg(crate::lang::tr("size: expected >10mb, <1g or 10mb..1gb", "size: ожидается >10mb, <1g или 10mb..1gb").to_string());
     if let Some((a, b)) = val.split_once("..") {
         q.min_size = Some(parse_size(a).ok_or_else(bad)?);
         q.max_size = Some(parse_size(b).ok_or_else(bad)?);

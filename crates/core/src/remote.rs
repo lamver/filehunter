@@ -4,6 +4,7 @@
 use crate::index::{flags, Segment, SegmentBuilder, SourceInfo, SourceKind, NO_PARENT};
 use crate::scan::ScanProgress;
 use crate::util::{unix_now, Ticker};
+use crate::lang::tr;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -87,10 +88,10 @@ pub struct CheckError {
 pub fn s3_check(cfg: &S3Config, secret: &str) -> std::result::Result<(), CheckError> {
     let fail = |message: String, details: String| CheckError { message, details };
     if cfg.bucket.is_empty() || cfg.access_key.is_empty() || secret.trim().is_empty() {
-        return Err(fail("Заполните бакет, Access Key и Secret Key".into(), String::new()));
+        return Err(fail(tr("Fill in the bucket, Access Key and Secret Key", "Заполните бакет, Access Key и Secret Key").into(), String::new()));
     }
-    let op = cfg.operator(secret).map_err(|e| fail("Неверные настройки подключения".into(), format!("{e:#}")))?;
-    let rt = runtime().map_err(|e| fail("Внутренняя ошибка".into(), format!("{e:#}")))?;
+    let op = cfg.operator(secret).map_err(|e| fail(tr("Invalid connection settings", "Неверные настройки подключения").into(), format!("{e:#}")))?;
+    let rt = runtime().map_err(|e| fail(tr("Internal error", "Внутренняя ошибка").into(), format!("{e:#}")))?;
     rt.block_on(async { op.list_with("/").limit(1).await })
         .map(|_| ())
         .map_err(|e| fail(explain(&e, cfg), format!("{e:#}")))
@@ -102,18 +103,28 @@ fn explain(e: &opendal::Error, cfg: &S3Config) -> String {
     let has = |s: &str| full.contains(s);
     let host = if cfg.endpoint.is_empty() { "AWS" } else { cfg.endpoint.as_str() };
     if has("SignatureDoesNotMatch") || has("InvalidAccessKeyId") || has("InvalidKeyId") {
-        "Неверный Access Key или Secret Key".to_string()
+        tr("Wrong Access Key or Secret Key", "Неверный Access Key или Secret Key").to_string()
     } else if has("NoSuchBucket") {
-        format!("Бакет «{}» не найден", cfg.bucket)
+        crate::l!("Bucket «{}» not found", "Бакет «{}» не найден", cfg.bucket)
     } else if has("PermanentRedirect") || has("AuthorizationHeaderMalformed") || has("IllegalLocationConstraint") {
-        "Неверный регион или endpoint для этого бакета".to_string()
+        tr("Wrong region or endpoint for this bucket", "Неверный регион или endpoint для этого бакета").to_string()
     } else if has("AccessDenied") || has("PermissionDenied") {
-        "Ключ принят, но у него нет прав на чтение списка файлов этого бакета".to_string()
+        tr(
+            "The key was accepted, but it has no permission to list the files in this bucket",
+            "Ключ принят, но у него нет прав на чтение списка файлов этого бакета",
+        )
+        .to_string()
     } else if has("dns") || has("connect") || has("timed out") || has("Timeout") {
-        format!("Не удалось соединиться с {host} — проверьте адрес и интернет")
+        crate::l!("Could not connect to {host} — check the address and your internet connection", "Не удалось соединиться с {host} — проверьте адрес и интернет")
     } else {
-        "Хранилище ответило ошибкой".to_string()
+        tr("The storage returned an error", "Хранилище ответило ошибкой").to_string()
     }
+}
+
+/// Ошибка S3 для человека: понятное объяснение и подробности.
+fn s3_err(e: &opendal::Error, cfg: &S3Config) -> anyhow::Error {
+    let why = explain(e, cfg);
+    anyhow::Error::msg(crate::l!("{why}. Details: {e:#}", "{why}. Подробности: {e:#}"))
 }
 
 /// Элемент папки, прочитанной напрямую (без индекса).
@@ -133,7 +144,7 @@ pub fn s3_list_dir(cfg: &S3Config, secret: &str, rel: &str) -> Result<Vec<LiveEn
     let dir = if rel.is_empty() { "/".to_string() } else { format!("{rel}/") };
     let entries = runtime()?
         .block_on(async { op.list_with(&dir).await })
-        .map_err(|e| anyhow::anyhow!("{}. Подробности: {e:#}", explain(&e, cfg)))?;
+        .map_err(|e| s3_err(&e, cfg))?;
     Ok(entries
         .into_iter()
         .filter_map(|e| {
@@ -162,7 +173,7 @@ pub fn s3_read_head(cfg: &S3Config, secret: &str, rel: &str, max: u64) -> Result
     let rel = rel.trim_start_matches('/').to_string();
     let buf = runtime()?
         .block_on(async { op.read_with(&rel).range(0..max).await })
-        .map_err(|e| anyhow::anyhow!("{}. Подробности: {e:#}", explain(&e, cfg)))?;
+        .map_err(|e| s3_err(&e, cfg))?;
     Ok(buf.to_vec())
 }
 
@@ -173,7 +184,7 @@ pub fn s3_presign(cfg: &S3Config, secret: &str, rel: &str, secs: u64) -> Result<
     let rel = rel.trim_start_matches('/').to_string();
     let req = runtime()?
         .block_on(async { op.presign_read(&rel, std::time::Duration::from_secs(secs)).await })
-        .map_err(|e| anyhow::anyhow!("{}. Подробности: {e:#}", explain(&e, cfg)))?;
+        .map_err(|e| s3_err(&e, cfg))?;
     Ok(req.uri().to_string())
 }
 
@@ -214,7 +225,7 @@ pub fn s3_read_range(cfg: &S3Config, secret: &str, rel: &str, offset: u64, len: 
     let rel = rel.trim_start_matches('/').to_string();
     let buf = runtime()?
         .block_on(async { op.read_with(&rel).range(offset..offset + len).await })
-        .map_err(|e| anyhow::anyhow!("{}. Подробности: {e:#}", explain(&e, cfg)))?;
+        .map_err(|e| s3_err(&e, cfg))?;
     Ok(buf.to_vec())
 }
 
@@ -229,11 +240,11 @@ pub fn s3_delete(cfg: &S3Config, secret: &str, rel: &str, is_dir: bool) -> Resul
     let op = cfg.operator(secret)?;
     let rel = rel.trim_matches('/').to_string();
     if rel.is_empty() {
-        bail!("нельзя удалить корень подключения");
+        bail!(tr("Cannot delete the root of the connection", "нельзя удалить корень подключения").to_string());
     }
     runtime()?
         .block_on(async { if is_dir { op.delete_with(&format!("{rel}/")).recursive(true).await } else { op.delete(&rel).await } })
-        .map_err(|e| anyhow::anyhow!("{}. Подробности: {e:#}", explain(&e, cfg)))
+        .map_err(|e| s3_err(&e, cfg))
 }
 
 /// Потоковая запись объекта кусками (большие файлы уходят частями — multipart).
@@ -249,12 +260,12 @@ impl S3Writer {
         let rel = rel.trim_start_matches('/').to_string();
         let w = rt
             .block_on(async { op.writer_with(&rel).chunk(8 << 20).await })
-            .map_err(|e| anyhow::anyhow!("{}. Подробности: {e:#}", explain(&e, cfg)))?;
+            .map_err(|e| s3_err(&e, cfg))?;
         Ok(Self { rt, w: Some(w) })
     }
 
     pub fn write(&mut self, buf: Vec<u8>) -> Result<()> {
-        let w = self.w.as_mut().ok_or_else(|| anyhow::anyhow!("запись уже закрыта"))?;
+        let w = self.w.as_mut().ok_or_else(|| anyhow::Error::msg(tr("Writing is already closed", "запись уже закрыта").to_string()))?;
         self.rt.block_on(async { w.write(buf).await })?;
         Ok(())
     }
@@ -276,7 +287,7 @@ impl S3Writer {
 /// Начало локального файла (не больше `max` байт), без блокировки файла.
 pub fn local_read_head(path: &std::path::Path, max: u64) -> Result<Vec<u8>> {
     use std::io::Read;
-    let f = crate::throttle::open_shared(path, false).with_context(|| format!("не удалось открыть {}", path.display()))?;
+    let f = crate::throttle::open_shared(path, false).with_context(|| crate::l!("Could not open {}", "не удалось открыть {}", path.display()))?;
     let mut buf = Vec::new();
     f.take(max).read_to_end(&mut buf)?;
     Ok(buf)
@@ -285,7 +296,7 @@ pub fn local_read_head(path: &std::path::Path, max: u64) -> Result<Vec<u8>> {
 /// Содержимое локальной папки, прочитанное с диска.
 pub fn local_list_dir(path: &std::path::Path) -> Result<Vec<LiveEntry>> {
     use crate::index::flags;
-    let rd = std::fs::read_dir(path).with_context(|| format!("не удалось открыть {}", path.display()))?;
+    let rd = std::fs::read_dir(path).with_context(|| crate::l!("Could not open {}", "не удалось открыть {}", path.display()))?;
     Ok(rd
         .flatten()
         .filter_map(|de| {
@@ -329,7 +340,7 @@ pub fn scan_s3_etags(
     let mut tree = Tree::default();
 
     runtime()?.block_on(async {
-        let why = |e: opendal::Error| anyhow::anyhow!("{}. Подробности: {e:#}", explain(&e, cfg));
+        let why = |e: opendal::Error| s3_err(&e, cfg);
         let mut lister = op.lister_with("/").recursive(true).await.map_err(why)?;
         while let Some(entry) = lister.try_next().await.map_err(why)? {
             if cancel.load(Ordering::Relaxed) {

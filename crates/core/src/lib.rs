@@ -3,6 +3,7 @@
 pub mod dupes;
 pub mod dupfind;
 pub mod index;
+pub mod lang;
 pub mod scan;
 pub mod remote;
 pub mod safety;

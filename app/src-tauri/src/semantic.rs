@@ -184,7 +184,7 @@ impl Semantic {
 
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
         let mut m = self.model.lock().unwrap();
-        let model = m.as_mut().ok_or("модель не загружена")?;
+        let model = m.as_mut().ok_or(filecat_core::lang::tr("The model is not loaded", "модель не загружена"))?;
         engine::embed(model, texts)
     }
 
@@ -195,7 +195,7 @@ impl Semantic {
             if !engine::SUPPORTED {
                 self.set_status(&app, |s| {
                     s.state = "error".into();
-                    s.error = "на Mac с процессором Intel пока недоступен".into();
+                    s.error = filecat_core::lang::tr("Not available yet on Macs with an Intel processor", "на Mac с процессором Intel пока недоступен").into();
                 });
                 return;
             }
@@ -348,7 +348,7 @@ impl Semantic {
             // модель уже скачана, если отпечатки есть; загрузить для запросов
             self.load_model(2)?;
         }
-        let q = self.embed(&[format!("query: {t}")])?.pop().ok_or("пустой ответ модели")?;
+        let q = self.embed(&[format!("query: {t}")])?.pop().ok_or(filecat_core::lang::tr("The model returned an empty response", "пустой ответ модели"))?;
         let norm = q.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
         let q: Vec<f32> = q.iter().map(|x| x / norm / 127.0).collect();
         let store = self.store.read().unwrap();
@@ -396,7 +396,7 @@ mod engine {
         o.show_download_progress = false;
         o.max_length = 64;
         o.intra_threads = Some(threads);
-        fastembed::TextEmbedding::try_new(o).map_err(|e| format!("модель не загрузилась: {e}"))
+        fastembed::TextEmbedding::try_new(o).map_err(|e| filecat_core::l!("Could not load the model: {e}", "модель не загрузилась: {e}"))
     }
 
     pub fn embed(m: &mut Model, texts: &[String]) -> Result<Vec<Vec<f32>>, String> {
@@ -410,11 +410,11 @@ mod engine {
     pub struct Model;
 
     pub fn load(_: &std::path::Path, _: usize) -> Result<Model, String> {
-        Err("на Mac с процессором Intel поиск по смыслу пока недоступен".into())
+        Err(filecat_core::lang::tr("Search by meaning is not available yet on Macs with an Intel processor", "на Mac с процессором Intel поиск по смыслу пока недоступен").into())
     }
 
     pub fn embed(_: &mut Model, _: &[String]) -> Result<Vec<Vec<f32>>, String> {
-        Err("на Mac с процессором Intel поиск по смыслу пока недоступен".into())
+        Err(filecat_core::lang::tr("Search by meaning is not available yet on Macs with an Intel processor", "на Mac с процессором Intel поиск по смыслу пока недоступен").into())
     }
 }
 

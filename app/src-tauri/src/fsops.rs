@@ -4,6 +4,8 @@
 //! вызывает их по сети (через p2p::serve).
 
 use crate::{creds, load_s3, AppState};
+use filecat_core::l;
+use filecat_core::lang::tr;
 use filecat_core::remote::{s3_delete, s3_exists, s3_list_tree, s3_read_range, S3Config, S3Writer};
 use filecat_core::safety::is_protected;
 use serde::{Deserialize, Serialize};
@@ -21,10 +23,10 @@ pub struct TreeItem {
 }
 
 fn s3_of(st: &AppState, path: &str) -> Result<(S3Config, String, String), String> {
-    let rest = path.strip_prefix("s3://").ok_or("не путь S3")?;
+    let rest = path.strip_prefix("s3://").ok_or(tr("Not an S3 path", "не путь S3"))?;
     let (name, rel) = rest.split_once('/').unwrap_or((rest, ""));
-    let cfg = load_s3(st).into_iter().find(|c| c.name == name).ok_or_else(|| format!("подключение «{name}» не найдено"))?;
-    let secret = creds::get(&cfg.name).ok_or("нет Secret Key")?;
+    let cfg = load_s3(st).into_iter().find(|c| c.name == name).ok_or_else(|| l!("Connection «{name}» not found", "подключение «{name}» не найдено"))?;
+    let secret = creds::get(&cfg.name).ok_or(tr("No Secret Key", "нет Secret Key"))?;
     Ok((cfg, secret, rel.to_string()))
 }
 
@@ -44,7 +46,7 @@ pub fn base_name(path: &str) -> String {
 
 fn guard(path: &str) -> Result<(), String> {
     if !is_s3(path) && is_protected(Path::new(path)) {
-        return Err(format!("{path}: системная папка — менять её нельзя"));
+        return Err(l!("{path}: system folder — it cannot be changed", "{path}: системная папка — менять её нельзя"));
     }
     Ok(())
 }
@@ -122,10 +124,10 @@ pub fn rename(from: &str, to: &str) -> Result<(), String> {
     guard(from)?;
     guard(to)?;
     if is_s3(from) || is_s3(to) {
-        return Err("в S3 переименования нет".into());
+        return Err(tr("S3 does not support renaming", "в S3 переименования нет").into());
     }
     if Path::new(to).exists() {
-        return Err(format!("{to}: уже существует"));
+        return Err(l!("{to}: already exists", "{to}: уже существует"));
     }
     std::fs::rename(from, to).map_err(|e| format!("{from}: {e}"))
 }

@@ -5,6 +5,8 @@
 
 use crate::fsops::{self, TreeItem, CHUNK};
 use crate::{p2p::P2p, AppState, Shared};
+use filecat_core::l;
+use filecat_core::lang::tr;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -253,11 +255,11 @@ impl Jobs {
                     (Ok(()), _) if j.errors.is_empty() => j.state = "done".into(),
                     (Ok(()), _) => {
                         j.state = "failed".into();
-                        j.error = format!("не удалось: {} из {}", j.errors.len(), j.files_total.max(j.errors.len() as u64));
+                        j.error = l!("Failed: {} of {}", "не удалось: {} из {}", j.errors.len(), j.files_total.max(j.errors.len() as u64));
                     }
                     (Err(e), _) => {
                         j.state = "failed".into();
-                        j.error = e.clone();
+                        j.error = crate::p2p::shown(e);
                     }
                 }
             });
@@ -292,15 +294,15 @@ fn title_of(j: &Job) -> String {
     let what = if n == 1 {
         j.items.first().map(|l| format!("«{}»", fsops::base_name(&l.path))).or_else(|| j.urls.first().map(|u| format!("«{}»", url_name(u)))).unwrap_or_default()
     } else {
-        format!("{n} объектов")
+        l!("{n} items", "{n} объектов")
     };
     let to = j.dest.as_ref().map(|d| format!(" → {}", d.path)).unwrap_or_default();
     match j.kind.as_str() {
-        "trash" => format!("В корзину: {what}"),
-        "delete" => format!("Удаление навсегда: {what}"),
-        "copy" => format!("Копирование {what}{to}"),
-        "move" => format!("Перемещение {what}{to}"),
-        "download" => format!("Загрузка {what}{to}"),
+        "trash" => l!("Move to Trash: {what}", "В корзину: {what}"),
+        "delete" => l!("Delete permanently: {what}", "Удаление навсегда: {what}"),
+        "copy" => l!("Copy {what}{to}", "Копирование {what}{to}"),
+        "move" => l!("Move {what}{to}", "Перемещение {what}{to}"),
+        "download" => l!("Download {what}{to}", "Загрузка {what}{to}"),
         _ => what,
     }
 }
@@ -334,13 +336,13 @@ pub fn probe(client: &reqwest::blocking::Client, url: &str) -> Probe {
     let resp = match client.get(url).header("Range", "bytes=0-0").timeout(Duration::from_secs(20)).send() {
         Ok(r) => r,
         Err(e) => {
-            p.error = if e.is_connect() || e.is_timeout() { "сервер не отвечает".into() } else { e.to_string() };
+            p.error = if e.is_connect() || e.is_timeout() { tr("The server is not responding", "сервер не отвечает").into() } else { e.to_string() };
             return p;
         }
     };
     let st = resp.status();
     if !st.is_success() {
-        p.error = format!("сервер ответил {st}");
+        p.error = l!("The server responded with {st}", "сервер ответил {st}");
         return p;
     }
     let h = resp.headers();
@@ -423,7 +425,7 @@ impl Side {
         match peer {
             None => Ok(Side::Here(st.clone())),
             Some(p) => {
-                let p2p = st.p2p.get().cloned().ok_or("связь с другими компьютерами ещё не запущена")?;
+                let p2p = st.p2p.get().cloned().ok_or(tr("The connection to other computers has not started yet", "связь с другими компьютерами ещё не запущена"))?;
                 if *p == p2p.id() {
                     return Ok(Side::Here(st.clone()));
                 }
@@ -493,7 +495,7 @@ impl Side {
                 return Ok(cand);
             }
         }
-        Err("не удалось подобрать свободное имя".into())
+        Err(tr("Could not find a free name", "не удалось подобрать свободное имя").into())
     }
 
     fn same(&self, other: &Side) -> bool {
@@ -621,7 +623,7 @@ impl Run<'_> {
         self.jobs.update(self.id, |j| {
             j.files_done += 1;
             if let Some(e) = err {
-                j.errors.push(e);
+                j.errors.push(crate::p2p::shown(&e));
             }
         });
         self.jobs.emit(false);
@@ -632,7 +634,7 @@ impl Run<'_> {
             "trash" | "delete" => self.delete(job, job.kind == "delete"),
             "copy" | "move" => self.copy(job, job.kind == "move"),
             "download" => self.download(job),
-            k => Err(format!("неизвестная задача: {k}")),
+            k => Err(l!("Unknown task: {k}", "неизвестная задача: {k}")),
         }
     }
 
@@ -652,7 +654,7 @@ impl Run<'_> {
     }
 
     fn copy(&mut self, job: &Job, mv: bool) -> Result<(), String> {
-        let dest = job.dest.as_ref().ok_or("не указано, куда")?;
+        let dest = job.dest.as_ref().ok_or(tr("Destination not specified", "не указано, куда"))?;
         let dst = Side::of(self.st, &dest.peer)?;
         // план: что откуда куда
         struct Step {
@@ -676,7 +678,7 @@ impl Run<'_> {
             if src.same(&dst) && (target_dir == it.path.trim_end_matches(['/', '\\']).to_lowercase()
                 || target_dir.starts_with(&format!("{}{}", it.path.trim_end_matches(['/', '\\']).to_lowercase(), if fsops::is_s3(&it.path) { "/" } else { "\\" })))
             {
-                return Err(format!("«{name}» нельзя скопировать внутрь самой себя"));
+                return Err(l!("«{name}» cannot be copied into itself", "«{name}» нельзя скопировать внутрь самой себя"));
             }
             let target_name = dst.free_name(&dest.path, &name)?;
             let target = fsops::join(&dest.path, &target_name);
@@ -695,9 +697,10 @@ impl Run<'_> {
                     }
                     // старая версия на другом компьютере не умеет переименовывать: иначе всё
                     // содержимое пошло бы через этот компьютер туда и обратно
-                    Err(e) if e.contains("неизвестный запрос") => {
+                    Err(e) if crate::p2p::is_unknown_request(&e) => {
                         let name = self.st.p2p.get().map(|p| p.peer_name(it.peer.as_deref().unwrap_or_default())).unwrap_or_default();
-                        return Err(format!(
+                        return Err(l!(
+                            "«{name}» has an old version of FileHunter: moving files within it would go through this computer over the network. Update FileHunter there and the move will be instant",
                             "На компьютере «{name}» старая версия FileHunter: перемещение внутри него пошло бы через этот компьютер по сети. Обновите FileHunter там — и перемещение будет мгновенным"
                         ));
                     }
@@ -733,7 +736,7 @@ impl Run<'_> {
             if self.cancelled() {
                 return Ok(());
             }
-            let src = side_of(s.src).ok_or("внутренняя ошибка")?;
+            let src = side_of(s.src).ok_or(tr("Internal error", "внутренняя ошибка"))?;
             let res = if s.is_dir { dst.mkdir(&s.to) } else { self.copy_file(src, &dst, &s.from, &s.to, s.size) };
             if res.is_err() {
                 failed[s.src] = true;
@@ -748,7 +751,7 @@ impl Run<'_> {
                 }
                 if let Some(src) = side_of(k) {
                     if let Err(e) = src.delete(&it.path, true) {
-                        self.jobs.update(self.id, |j| j.errors.push(format!("не удалось удалить исходник {}: {e}", it.path)));
+                        self.jobs.update(self.id, |j| j.errors.push(l!("Could not delete the source {}: {}", "не удалось удалить исходник {}: {}", it.path, crate::p2p::shown(&e))));
                     }
                 }
             }
@@ -762,11 +765,11 @@ impl Run<'_> {
         let res = (|| {
             while off < size {
                 if self.cancelled() {
-                    return Err("отменено".to_string());
+                    return Err(tr("Cancelled", "отменено").to_string());
                 }
                 let buf = src.read(from, off, CHUNK.min(size - off))?;
                 if buf.is_empty() {
-                    return Err("файл стал короче, чем был — изменился во время копирования?".into());
+                    return Err(tr("The file got shorter than it was — did it change while copying?", "файл стал короче, чем был — изменился во время копирования?").into());
                 }
                 let n = buf.len() as u64;
                 sink.write(buf)?;
@@ -785,7 +788,7 @@ impl Run<'_> {
     }
 
     fn download(&mut self, job: &Job) -> Result<(), String> {
-        let dest = job.dest.as_ref().ok_or("не указано, куда")?;
+        let dest = job.dest.as_ref().ok_or(tr("Destination not specified", "не указано, куда"))?;
         let dst = Side::of(self.st, &dest.peer)?;
         self.jobs.update(self.id, |j| j.files_total = job.urls.len() as u64);
         let client = http_client()?;
@@ -823,7 +826,7 @@ impl Run<'_> {
             }
             let resp = match req.send() {
                 Ok(r) if r.status().is_success() => r,
-                Ok(r) => break Err(format!("сервер ответил {}", r.status())),
+                Ok(r) => break Err(l!("The server responded with {}", "сервер ответил {}", r.status())),
                 Err(e) => {
                     tries += 1;
                     if tries > 5 {
@@ -834,7 +837,7 @@ impl Run<'_> {
                 }
             };
             if got > 0 && resp.status() != reqwest::StatusCode::PARTIAL_CONTENT {
-                break Err("сервер не поддерживает докачку — начните загрузку заново".into());
+                break Err(tr("The server does not support resuming — start the download again", "сервер не поддерживает докачку — начните загрузку заново").into());
             }
             if total.is_none() {
                 total = resp.content_length().map(|n| n + got);
@@ -846,7 +849,7 @@ impl Run<'_> {
             let mut buf = vec![0u8; 1 << 20];
             let step = loop {
                 if self.cancelled() {
-                    break Some(Err("отменено".to_string()));
+                    break Some(Err(tr("Cancelled", "отменено").to_string()));
                 }
                 match resp.read(&mut buf) {
                     Ok(0) => break Some(Ok(())),
@@ -865,7 +868,7 @@ impl Run<'_> {
                 None => {
                     tries += 1;
                     if tries > 5 {
-                        break Err("соединение обрывается".into());
+                        break Err(tr("The connection keeps dropping", "соединение обрывается").into());
                     }
                     std::thread::sleep(Duration::from_secs(2));
                 }
@@ -875,7 +878,7 @@ impl Run<'_> {
             Ok(()) if total.is_none_or(|t| got >= t) => sink.finish(),
             Ok(()) => {
                 sink.abort();
-                Err("загружено не полностью".into())
+                Err(tr("The download is incomplete", "загружено не полностью").into())
             }
             Err(e) => {
                 sink.abort();

@@ -16,18 +16,18 @@
       <button role="menuitem" data-menu="settings" data-i18n="menu.settings">Settings</button>
       <button role="menuitem" data-menu="about" data-i18n="menu.about">About</button>
     </div>
-    <nav id="ftabs" class="ftabs" role="tablist" aria-label="Вкладки"></nav>
-    <button id="ftab-new" class="ftab-new" title="Новая вкладка (Ctrl+T)" aria-label="Новая вкладка">+</button>
+    <nav id="ftabs" class="ftabs" role="tablist" data-i18n-aria="tabs.aria" aria-label="Tabs"></nav>
+    <button id="ftab-new" class="ftab-new" data-i18n-title="tabs.new.title" data-i18n-aria="tabs.new" title="New tab (Ctrl+T)" aria-label="New tab">+</button>
     <span class="spacer"></span>
   </header>
 
   <main id="tab-sources" class="view active">
     <div class="explorer">
       <aside class="side">
-        <nav id="src-list" class="src-list" aria-label="Источники"></nav>
+        <nav id="src-list" class="src-list" data-i18n-aria="sources.aria" aria-label="Sources"></nav>
         <div class="side-foot">
-          <button id="src-add" class="primary">+ Добавить источник</button>
-          <label title="Меньше потоков и ровный темп: дольше, но без пиков нагрузки на диск"><input id="s-gentle" type="checkbox" checked> Бережный режим</label>
+          <button id="src-add" class="primary" data-i18n="sources.add">+ Add source</button>
+          <label data-i18n-title="sources.gentle.title" title="Fewer threads and a steady pace: slower, but without disk load spikes"><input id="s-gentle" type="checkbox" checked> <span data-i18n="sources.gentle">Gentle mode</span></label>
         </div>
       </aside>
 
@@ -35,8 +35,8 @@
         <div class="pane-head">
           <div id="omni" class="omni">
             <svg class="lens" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M10.5 10.5l3.5 3.5" stroke="currentColor" stroke-width="1.5"/></svg>
-            <nav id="b-crumbs" class="crumbs" aria-label="Путь"></nav>
-            <input id="b-q" spellcheck="false" autocomplete="off" aria-label="Поиск или путь">
+            <nav id="b-crumbs" class="crumbs" data-i18n-aria="browse.path.aria" aria-label="Path"></nav>
+            <input id="b-q" spellcheck="false" autocomplete="off" data-i18n-aria="browse.q.aria" aria-label="Search or path">
             <div id="omni-drop" class="drop hidden"></div>
           </div>
         </div>
@@ -45,11 +45,11 @@
         <div class="b-inner">
         <div id="b-head" class="brow bhead">
           <span></span>
-          <button data-bsort="name">Имя</button>
-          <button data-bsort="mtime">Изменён</button>
-          <button data-bsort="type">Тип</button>
-          <button data-bsort="size" class="num">Размер</button>
-          <button data-bsort="files" class="num">Файлов</button>
+          <button data-bsort="name" data-i18n="col.name">Name</button>
+          <button data-bsort="mtime" data-i18n="col.mtime">Modified</button>
+          <button data-bsort="type" data-i18n="col.type">Type</button>
+          <button data-bsort="size" class="num" data-i18n="col.size">Size</button>
+          <button data-bsort="files" class="num" data-i18n="col.files">Files</button>
         </div>
         <div id="b-list" class="b-list" tabindex="0"></div>
         </div>
@@ -62,10 +62,10 @@
 
     <!-- Задачи: удаление, копирование, перемещение, загрузка -->
     <section id="tasks" class="tasks collapsed">
-      <div id="tasks-grip" class="tasks-grip" title="Потяните, чтобы изменить высоту"></div>
-      <div id="tasks-head" class="tasks-head"><b>Задачи</b> <span id="tasks-count" class="muted"></span><span class="spacer"></span>
-        <button id="tasks-clear" title="Убрать из списка завершённые задачи">Очистить завершённые</button>
-        <button id="tasks-hide" title="Скрыть лог задач">Свернуть</button></div>
+      <div id="tasks-grip" class="tasks-grip" data-i18n-title="tasks.grip.title" title="Drag to resize"></div>
+      <div id="tasks-head" class="tasks-head"><b data-i18n="tasks.title">Tasks</b> <span id="tasks-count" class="muted"></span><span class="spacer"></span>
+        <button id="tasks-clear" data-i18n-title="tasks.clear.title" data-i18n="tasks.clear" title="Remove finished tasks from the list">Clear finished</button>
+        <button id="tasks-hide" data-i18n-title="tasks.hide.title" data-i18n="tasks.hide" title="Hide the task log">Collapse</button></div>
       <div id="tasks-list" class="tasks-list"></div>
     </section>
 
@@ -73,20 +73,20 @@
 
   <main id="tab-about" class="view">
     <div class="about">
-      <h2>FileHunter <span id="a-version" class="muted"></span> <span class="beta">бета</span></h2>
+      <h2>FileHunter <span id="a-version" class="muted"></span> <span class="beta" data-i18n="about.beta">beta</span></h2>
       <div class="upd">
-        <button id="a-upd">Проверить обновления</button>
+        <button id="a-upd" data-i18n="update.check">Check for updates</button>
         <span id="a-upd-msg" class="muted"></span>
       </div>
       <pre id="a-upd-notes" class="upd-notes hidden"></pre>
-      <p>Файлы всех дисков, облачных хранилищ и ваших компьютеров в одном окне. Диски сканируются один раз, дальше каталог обновляется сам по сигналам системы: создание, изменение, удаление файлов, подключение и отключение дисков.</p>
+      <p data-i18n="about.desc">Files from all your drives, cloud storage and computers in one window. Drives are scanned once; after that the catalog updates itself from system signals: files created, changed or deleted, drives connected or disconnected.</p>
       <dl>
-        <dt>Индекс</dt><dd id="a-index"></dd>
-        <dt>Поиск по смыслу</dt><dd id="a-sem"></dd>
-        <dt>Данные программы</dt><dd><span id="a-data"></span> <button id="a-open">Открыть папку</button></dd>
+        <dt data-i18n="about.index">Index</dt><dd id="a-index"></dd>
+        <dt data-i18n="about.sem">Search by meaning</dt><dd id="a-sem"></dd>
+        <dt data-i18n="about.data">App data</dt><dd><span id="a-data"></span> <button id="a-open" data-i18n="about.openFolder">Open folder</button></dd>
       </dl>
-      <p class="muted">Ключи облачных подключений хранятся в хранилище паролей системы (диспетчер учётных данных Windows, связка ключей macOS). Файлы программа не блокирует. Телеметрии нет.</p>
-      <p class="muted">© 2026 Valerij Frolov · лицензия FSL-1.1-MIT · <a href="#" id="a-repo">github.com/lamver/filehunter</a></p>
+      <p class="muted" data-i18n="about.keys">Cloud connection keys are kept in the system password store (Windows Credential Manager, macOS Keychain). The app never locks files. No telemetry.</p>
+      <p class="muted">© 2026 Valerij Frolov · <span data-i18n="about.license">FSL-1.1-MIT license</span> · <a href="#" id="a-repo">github.com/lamver/filehunter</a></p>
     </div>
   </main>
 
@@ -111,28 +111,28 @@
   <div id="ask-modal" class="modal hidden" role="alertdialog" aria-modal="true" aria-labelledby="ask-text">
     <div class="modal-box ask-box">
       <div id="ask-text" class="ask-text"></div>
-      <div class="btns"><button type="button" id="ask-no">Отмена</button><button type="button" id="ask-yes">Да</button></div>
+      <div class="btns"><button type="button" id="ask-no" data-i18n="common.cancel">Cancel</button><button type="button" id="ask-yes">Yes</button></div>
     </div>
   </div>
 
   <!-- Что этот компьютер открывает сопряжённому устройству -->
   <div id="share-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="share-title">
     <div class="modal-box m-form">
-      <h3 id="share-title">Доступ к этому компьютеру</h3>
-      <p class="muted">Отмеченное будет видно на том компьютере. Проверка — здесь: он не получит ничего сверх этого.</p>
+      <h3 id="share-title" data-i18n="share.title">Access to this computer</h3>
+      <p class="muted" data-i18n="share.hint">What you check will be visible on that computer. Access is enforced here: it gets nothing beyond that.</p>
       <div id="share-pick-edit" class="share-pick"></div>
-      <div class="btns"><button type="button" id="share-save" class="primary">Сохранить</button><button type="button" id="share-cancel">Отмена</button></div>
+      <div class="btns"><button type="button" id="share-save" class="primary" data-i18n="common.save">Save</button><button type="button" id="share-cancel" data-i18n="common.cancel">Cancel</button></div>
     </div>
   </div>
 
   <!-- Загрузка по ссылке -->
   <div id="dl-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="dl-title">
     <form id="dl-form" class="modal-box m-form" autocomplete="off">
-      <h3 id="dl-title">Загрузить по ссылке</h3>
-      <p class="muted">Куда: <b id="dl-dest"></b></p>
-      <textarea id="dl-urls" rows="5" placeholder="https://… — по одной ссылке на строку" spellcheck="false"></textarea>
-      <p class="muted">Если связь оборвётся, загрузка продолжится с того же места (если сервер это поддерживает).</p>
-      <div class="btns"><button type="submit" class="primary">Загрузить</button><button type="button" id="dl-cancel">Отмена</button></div>
+      <h3 id="dl-title" data-i18n="dl.title">Download from links</h3>
+      <p class="muted"><span data-i18n="dl.dest">To:</span> <b id="dl-dest"></b></p>
+      <textarea id="dl-urls" rows="5" data-i18n-placeholder="dl.urls.placeholder" placeholder="https://… — one link per line" spellcheck="false"></textarea>
+      <p class="muted" data-i18n="dl.resume">If the connection drops, the download resumes where it left off (if the server supports it).</p>
+      <div class="btns"><button type="submit" class="primary" data-i18n="dl.submit">Download</button><button type="button" id="dl-cancel" data-i18n="common.cancel">Cancel</button></div>
     </form>
   </div>
 
@@ -140,77 +140,77 @@
   <div id="add-modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="m-title">
     <div class="modal-box">
       <header>
-        <button id="m-back" class="icon-btn hidden" aria-label="Назад">←</button>
-        <h3 id="m-title">Добавить источник</h3>
+        <button id="m-back" class="icon-btn hidden" data-i18n-aria="common.back" aria-label="Back">←</button>
+        <h3 id="m-title" data-i18n="add.title">Add source</h3>
         <span class="spacer"></span>
-        <button id="m-close" class="icon-btn" aria-label="Закрыть">✕</button>
+        <button id="m-close" class="icon-btn" data-i18n-aria="common.close" aria-label="Close">✕</button>
       </header>
 
       <div id="m-types" class="types">
-        <button data-type="local"><b>Папка или диск</b><span>Локальная папка, флешка, подключённый сетевой диск</span></button>
-        <button data-type="s3"><b>S3</b><span>Amazon S3 и любое S3-совместимое хранилище</span></button>
-        <button data-type="peer"><b>Другой компьютер</b><span>Видеть его диски и подключения отсюда, а этот — оттуда</span></button>
-        <button data-type="webdav" disabled><b>WebDAV</b><span>Nextcloud, ownCloud, Яндекс Диск</span><i>скоро</i></button>
-        <button data-type="sftp" disabled><b>SFTP</b><span>Сервер по SSH</span><i>скоро</i></button>
-        <button data-type="smb" disabled><b>SMB</b><span>Сетевая папка Windows по адресу \\сервер\папка</span><i>скоро</i></button>
-        <button data-type="gdrive" disabled><b>Google Drive</b><span>Диск Google-аккаунта</span><i>скоро</i></button>
+        <button data-type="local"><b data-i18n="add.local">Folder or drive</b><span data-i18n="add.local.desc">Local folder, USB stick, mapped network drive</span></button>
+        <button data-type="s3"><b>S3</b><span data-i18n="add.s3.desc">Amazon S3 and any S3-compatible storage</span></button>
+        <button data-type="peer"><b data-i18n="add.peer">Another computer</b><span data-i18n="add.peer.desc">See its drives and connections from here, and this one from there</span></button>
+        <button data-type="webdav" disabled><b>WebDAV</b><span data-i18n="add.webdav.desc">Nextcloud, ownCloud, Yandex Disk</span><i data-i18n="add.soon">soon</i></button>
+        <button data-type="sftp" disabled><b>SFTP</b><span data-i18n="add.sftp.desc">Server over SSH</span><i data-i18n="add.soon">soon</i></button>
+        <button data-type="smb" disabled><b>SMB</b><span data-i18n="add.smb.desc">Windows network folder at \\server\folder</span><i data-i18n="add.soon">soon</i></button>
+        <button data-type="gdrive" disabled><b>Google Drive</b><span data-i18n="add.gdrive.desc">Drive of your Google account</span><i data-i18n="add.soon">soon</i></button>
       </div>
 
       <form id="m-local" class="m-form hidden" autocomplete="off">
-        <label>Папка или диск
-          <span class="row"><input name="path" required placeholder="D:\Photos" /><button type="button" class="browse" data-browse="#m-local [name=path]">Обзор…</button></span>
+        <label><span data-i18n="add.local">Folder or drive</span>
+          <span class="row"><input name="path" required placeholder="D:\Photos" /><button type="button" class="browse" data-browse="#m-local [name=path]" data-i18n="common.browse">Browse…</button></span>
         </label>
-        <p class="muted">Папка будет просканирована и дальше будет обновляться сама, пока программа запущена.</p>
-        <div class="btns"><button type="submit" class="primary">Сканировать</button><span class="m-status muted"></span></div>
+        <p class="muted" data-i18n="local.hint">The folder will be scanned and then keep itself up to date while the app is running.</p>
+        <div class="btns"><button type="submit" class="primary" data-i18n="local.scan">Scan</button><span class="m-status muted"></span></div>
       </form>
 
       <div id="m-peer" class="m-form hidden">
-        <p class="muted">На втором компьютере тоже должен быть установлен и запущен FileHunter. Компьютеры могут быть в одной сети или в разных — через интернет соединение тоже установится. Всё передаётся зашифрованным.</p>
+        <p class="muted" data-i18n="peer.intro">FileHunter must also be installed and running on the other computer. The computers can be on the same network or on different ones — the connection works over the internet too. Everything is encrypted in transit.</p>
         <div class="peer-box">
-          <h4>Открыть этот компьютер другому</h4>
-          <p class="muted">Отметьте, что будет видно на другом компьютере, создайте код и введите его там. Тот компьютер получит доступ к отмеченному здесь, а своё не откроет. Код подходит один раз и действует 10 минут.</p>
+          <h4 data-i18n="peer.share.h">Share this computer with another</h4>
+          <p class="muted" data-i18n="peer.share.hint">Check what the other computer will see, create a code and enter it there. That computer gets access to what you checked here but shares nothing of its own. The code works once and is valid for 10 minutes.</p>
           <div id="share-pick-invite" class="share-pick"></div>
-          <div class="row"><input id="peer-code-out" readonly placeholder="здесь появится код"><button type="button" id="peer-invite" class="primary">Создать код</button><button type="button" id="peer-copy" class="hidden">Копировать</button></div>
+          <div class="row"><input id="peer-code-out" readonly data-i18n-placeholder="peer.code.placeholder" placeholder="the code will appear here"><button type="button" id="peer-invite" class="primary" data-i18n="peer.invite">Create code</button><button type="button" id="peer-copy" class="hidden" data-i18n="peer.copy">Copy</button></div>
           <span id="peer-wait" class="m-status muted"></span>
         </div>
         <div class="peer-box">
-          <h4>Подключиться по коду</h4>
-          <p class="muted">Вставьте код, созданный на другом компьютере. Вы увидите то, что там открыли; этот компьютер ему ничего не откроет — это можно сделать потом (правый клик по устройству → «Доступ к этому компьютеру…»).</p>
-          <form id="peer-join-form" class="row" autocomplete="off"><input id="peer-code-in" spellcheck="false" placeholder="FC1-…"><button type="submit" class="primary" id="peer-join">Подключить</button></form>
+          <h4 data-i18n="peer.join.h">Connect with a code</h4>
+          <p class="muted" data-i18n="peer.join.hint">Paste the code created on the other computer. You will see what was shared there; this computer shares nothing with it — you can do that later (right-click the device → “Access to this computer…”).</p>
+          <form id="peer-join-form" class="row" autocomplete="off"><input id="peer-code-in" spellcheck="false" placeholder="FC1-…"><button type="submit" class="primary" id="peer-join" data-i18n="peer.join">Connect</button></form>
           <span id="peer-join-status" class="m-status muted"></span>
         </div>
       </div>
 
       <form id="s3-form" class="m-form hidden" autocomplete="off">
-        <p class="muted">Индексируется только список файлов — содержимое не скачивается. Secret Key хранится в диспетчере учётных данных Windows.</p>
+        <p class="muted" data-i18n="s3.hint">Only the file list is indexed — contents are not downloaded. The Secret Key is kept in Windows Credential Manager.</p>
         <div class="grid">
-          <label>Название<input name="name" required placeholder="как будет называться в списке"></label>
-          <label>Бакет<input name="bucket" placeholder="my-bucket"></label>
-          <label>Endpoint<input name="endpoint" placeholder="адрес хранилища; пусто — Amazon S3"></label>
-          <label>Регион<input name="region" placeholder="пусто — us-east-1"></label>
-          <label>Папка в бакете<input name="prefix" placeholder="необязательно, например photos/2025"></label>
+          <label><span data-i18n="s3.name">Name</span><input name="name" required data-i18n-placeholder="s3.name.placeholder" placeholder="how it will appear in the list"></label>
+          <label><span data-i18n="s3.bucket">Bucket</span><input name="bucket" placeholder="my-bucket"></label>
+          <label>Endpoint<input name="endpoint" data-i18n-placeholder="s3.endpoint.placeholder" placeholder="storage address; empty — Amazon S3"></label>
+          <label><span data-i18n="s3.region">Region</span><input name="region" data-i18n-placeholder="s3.region.placeholder" placeholder="empty — us-east-1"></label>
+          <label><span data-i18n="s3.prefix">Folder in bucket</span><input name="prefix" data-i18n-placeholder="s3.prefix.placeholder" placeholder="optional, e.g. photos/2025"></label>
           <span></span>
           <label>Access Key ID<input name="access_key" spellcheck="false"></label>
           <label>Secret Access Key
-            <span class="row"><input name="secret" type="password" spellcheck="false"><button type="button" id="s3-eye" title="Показать или скрыть ключ">Показать</button></span>
+            <span class="row"><input name="secret" type="password" spellcheck="false"><button type="button" id="s3-eye" data-i18n-title="s3.eye.title" title="Show or hide the key">Show</button></span>
           </label>
         </div>
         <div class="btns">
-          <button type="button" id="s3-test">Проверить подключение</button>
-          <button type="submit" class="primary" id="s3-save">Сохранить</button>
-          <button type="button" id="s3-cancel">Отмена</button>
+          <button type="button" id="s3-test" data-i18n="s3.test">Test connection</button>
+          <button type="submit" class="primary" id="s3-save" data-i18n="common.save">Save</button>
+          <button type="button" id="s3-cancel" data-i18n="common.cancel">Cancel</button>
         </div>
-        <div id="s3-result" class="check hidden"><b></b><details><summary>Подробнее</summary><pre></pre></details></div>
+        <div id="s3-result" class="check hidden"><b></b><details><summary data-i18n="common.details">Details</summary><pre></pre></details></div>
       </form>
     </div>
   </div>
 
   <footer class="statusbar">
-    <button id="st-tasks" class="st-tasks" title="Показать или скрыть лог задач"></button>
+    <button id="st-tasks" class="st-tasks" data-i18n-title="tasks.toggle.title" title="Show or hide the task log"></button>
     <span id="st-index"></span>
     <span id="st-task" class="muted"></span>
     <span class="spacer"></span>
-    <span id="st-watch" class="muted" title="Индекс и дубликаты обновляются сами, когда файлы создаются, меняются или удаляются"></span>
+    <span id="st-watch" class="muted" data-i18n-title="status.watch.title" title="The index and duplicates update themselves when files are created, changed or deleted"></span>
   </footer>
 
   <div id="ctx" class="ctx hidden" role="menu"></div>

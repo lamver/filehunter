@@ -404,7 +404,7 @@ impl Segment {
         let limit = (b.len() as u64).saturating_mul(16).max(64 << 20);
         let dec = zstd::Decoder::new(b)?;
         let opts = bincode::DefaultOptions::new().with_fixint_encoding().allow_trailing_bytes().with_limit(limit);
-        let mut seg: Segment = opts.deserialize_from(dec).context("сегмент повреждён")?;
+        let mut seg: Segment = opts.deserialize_from(dec).context(crate::lang::tr("index segment is corrupted", "сегмент повреждён"))?;
         seg.rebuild_lower();
         Ok(seg)
     }

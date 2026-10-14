@@ -17,7 +17,8 @@ use filecat_core::scan::{scan_walk, ScanOptions};
 use filecat_core::search::{search, search_in, Query, SortBy};
 use filecat_core::remote::{local_list_dir, s3_check, s3_list_dir, scan_s3_etags, CheckError, LiveEntry, S3Config};
 use filecat_core::safety::is_protected;
-use filecat_core::{FileRef, Index};
+use filecat_core::lang::tr;
+use filecat_core::{l, FileRef, Index};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -153,7 +154,7 @@ fn source_rename(app: AppHandle, st: State<Shared>, root: String, name: String) 
         if name.is_empty() {
             return Ok(());
         }
-        let cfg = load_s3(&st).into_iter().find(|c| c.name == old).ok_or("подключение не найдено")?;
+        let cfg = load_s3(&st).into_iter().find(|c| c.name == old).ok_or(tr("Connection not found", "подключение не найдено"))?;
         return s3_save(app, st, S3Config { name, ..cfg }, String::new(), Some(old.to_string()));
     }
     let mut p = load_prefs(&st);
@@ -317,7 +318,7 @@ pub(crate) fn locate_in(st: &AppState, path: &str) -> CmdResult<(u16, Option<u32
             p == r || (p.starts_with(r) && p[r.len()..].starts_with(['\\', '/']))
         })
         .max_by_key(|(_, s)| s.info.root.len())
-        .ok_or_else(|| format!("«{}» нет в индексе", path.trim()))?;
+        .ok_or_else(|| l!("«{}» is not in the index", "«{}» нет в индексе", path.trim()))?;
     let r = seg.info.root.to_lowercase();
     let rest = &p[r.trim_end_matches(['\\', '/']).len()..];
     let temp;
@@ -337,7 +338,7 @@ pub(crate) fn locate_in(st: &AppState, path: &str) -> CmdResult<(u16, Option<u32
         let next = kids
             .into_iter()
             .find(|&k| seg.lower(k) == part && seg.entries[k as usize].is_dir())
-            .ok_or_else(|| format!("Папка «{part}» не найдена в индексе"))?;
+            .ok_or_else(|| l!("Folder «{part}» not found in the index", "Папка «{part}» не найдена в индексе"))?;
         cur = Some(next);
     }
     Ok((si as u16, cur))
@@ -430,7 +431,7 @@ fn folder_totals(st: &AppState, idx: &Index, seg: u16) -> Arc<HashMap<u32, (u64,
 fn browse(st: State<Shared>, seg: u16, dir: Option<u32>, sort: Option<String>, desc: bool) -> CmdResult<BrowseDto> {
     // дерево детей строится один раз и дальше обновляется слежением; для этого нужна запись.
     // Если индекс занят (идёт долгий поиск дубликатов), строим временное дерево по чтению.
-    let built = st.index.read().unwrap().segments.get(seg as usize).ok_or("источник не найден")?.has_children_map();
+    let built = st.index.read().unwrap().segments.get(seg as usize).ok_or(tr("Source not found", "источник не найден"))?.has_children_map();
     if !built {
         if let Ok(mut idx) = st.index.try_write() {
             idx.segments[seg as usize].ensure_children();
@@ -540,7 +541,7 @@ fn search_folder(st: State<Shared>, seg: u16, dir: Option<u32>, query: String) -
     let q = Query::parse(&query).map_err(err)?;
     let t = Instant::now();
     let idx = st.index.read().unwrap();
-    let s = idx.segments.get(seg as usize).ok_or("источник не найден")?;
+    let s = idx.segments.get(seg as usize).ok_or(tr("Source not found", "источник не найден"))?;
     let (hits, total) = search_in(&idx, seg, dir, &q, 5000);
     let totals = folder_totals(&st, &idx, seg);
     let base = match dir {
@@ -836,7 +837,7 @@ fn semantic_status(st: State<Shared>) -> semantic::Status {
 async fn s3_refresh(st: State<'_, Shared>, seg: u16, dir: Option<u32>) -> CmdResult<usize> {
     let local = {
         let idx = st.index.read().unwrap();
-        let s = idx.segments.get(seg as usize).ok_or("источник не найден")?;
+        let s = idx.segments.get(seg as usize).ok_or(tr("Source not found", "источник не найден"))?;
         (!s.is_remote()).then(|| {
             let path = match dir {
                 Some(d) => s.path(d),
@@ -850,7 +851,7 @@ async fn s3_refresh(st: State<'_, Shared>, seg: u16, dir: Option<u32>) -> CmdRes
     }
     let (root, rel) = {
         let idx = st.index.read().unwrap();
-        let s = idx.segments.get(seg as usize).ok_or("источник не найден")?;
+        let s = idx.segments.get(seg as usize).ok_or(tr("Source not found", "источник не найден"))?;
         let path = match dir {
             Some(d) => s.path(d).to_string_lossy().into_owned(),
             None => s.info.root.clone(),
@@ -858,8 +859,8 @@ async fn s3_refresh(st: State<'_, Shared>, seg: u16, dir: Option<u32>) -> CmdRes
         let rel = path.get(s.info.root.len()..).unwrap_or_default().to_string();
         (s.info.root.clone(), rel)
     };
-    let cfg = load_s3(&st).into_iter().find(|c| c.root() == root).ok_or("подключение не найдено")?;
-    let secret = creds::get(&cfg.name).ok_or("нет Secret Key")?;
+    let cfg = load_s3(&st).into_iter().find(|c| c.root() == root).ok_or(tr("Connection not found", "подключение не найдено"))?;
+    let secret = creds::get(&cfg.name).ok_or(tr("No Secret Key", "нет Secret Key"))?;
     let live = tauri::async_runtime::spawn_blocking(move || s3_list_dir(&cfg, &secret, &rel))
         .await
         .map_err(err)?
@@ -980,8 +981,8 @@ async fn preview(st: State<'_, Shared>, root: String, path: String, size: u64) -
     let remote = root.starts_with("s3://");
     // картинку из S3 окно загрузит само по временной ссылке — быстрее и без перекодирования
     if remote && !text {
-        let cfg = load_s3(&st).into_iter().find(|c| c.root() == root).ok_or("подключение не найдено")?;
-        let secret = creds::get(&cfg.name).ok_or("нет Secret Key")?;
+        let cfg = load_s3(&st).into_iter().find(|c| c.root() == root).ok_or(tr("Connection not found", "подключение не найдено"))?;
+        let secret = creds::get(&cfg.name).ok_or(tr("No Secret Key", "нет Secret Key"))?;
         let rel = path.get(root.len()..).unwrap_or_default().to_string();
         let url = tauri::async_runtime::spawn_blocking(move || filecat_core::remote::s3_presign(&cfg, &secret, &rel, 15 * 60))
             .await
@@ -990,8 +991,8 @@ async fn preview(st: State<'_, Shared>, root: String, path: String, size: u64) -
         return Ok(PreviewDto { kind: "image", data: url });
     }
     let s3 = if remote {
-        let cfg = load_s3(&st).into_iter().find(|c| c.root() == root).ok_or("подключение не найдено")?;
-        let secret = creds::get(&cfg.name).ok_or("нет Secret Key")?;
+        let cfg = load_s3(&st).into_iter().find(|c| c.root() == root).ok_or(tr("Connection not found", "подключение не найдено"))?;
+        let secret = creds::get(&cfg.name).ok_or(tr("No Secret Key", "нет Secret Key"))?;
         Some((cfg, secret))
     } else {
         None
@@ -1050,8 +1051,8 @@ async fn browse_live(st: State<'_, Shared>, root: String, path: String) -> CmdRe
         Path::new(&path).parent().map(|p| p.to_string_lossy().into_owned())
     };
     let items = if remote {
-        let cfg = load_s3(&st).into_iter().find(|c| c.root() == root).ok_or("подключение не найдено")?;
-        let secret = creds::get(&cfg.name).ok_or("нет Secret Key — откройте «Изменить подключение»")?;
+        let cfg = load_s3(&st).into_iter().find(|c| c.root() == root).ok_or(tr("Connection not found", "подключение не найдено"))?;
+        let secret = creds::get(&cfg.name).ok_or(tr("No Secret Key — open «Edit connection»", "нет Secret Key — откройте «Изменить подключение»"))?;
         let rel = path.get(root.len()..).unwrap_or_default().to_string();
         tauri::async_runtime::spawn_blocking(move || s3_list_dir(&cfg, &secret, &rel)).await.map_err(err)?
     } else {
@@ -1073,14 +1074,38 @@ fn show_main(app: &AppHandle) {
     }
 }
 
-fn tray(app: &tauri::App) -> tauri::Result<()> {
+/// Меню значка в трее — на текущем языке.
+fn tray_menu<M: Manager<tauri::Wry>>(m: &M) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
+    use filecat_core::lang::tr;
     use tauri::menu::{Menu, MenuItem};
+    let open = MenuItem::with_id(m, "open", tr("Open FileHunter", "Открыть FileHunter"), true, None::<&str>)?;
+    let quit = MenuItem::with_id(m, "quit", tr("Quit", "Выход"), true, None::<&str>)?;
+    Menu::with_items(m, &[&open, &quit])
+}
+
+fn tray_tooltip() -> &'static str {
+    filecat_core::lang::tr("FileHunter — running in the background", "FileHunter — работает в фоне")
+}
+
+/// Язык интерфейса выбран в окне: сообщения ядра и меню в трее — на нём же; запоминаем,
+/// чтобы при следующем запуске трей сразу был на нужном языке.
+#[tauri::command]
+fn set_lang(app: AppHandle, st: State<Shared>, lang: String) {
+    filecat_core::lang::set(&lang);
+    let _ = std::fs::write(st.data_dir.join("lang.txt"), filecat_core::lang::code());
+    if let Some(t) = app.tray_by_id("main") {
+        if let Ok(menu) = tray_menu(&app) {
+            let _ = t.set_menu(Some(menu));
+        }
+        let _ = t.set_tooltip(Some(tray_tooltip()));
+    }
+}
+
+fn tray(app: &tauri::App) -> tauri::Result<()> {
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-    let open = MenuItem::with_id(app, "open", "Открыть FileHunter", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let menu = tray_menu(app)?;
     let mut b = TrayIconBuilder::with_id("main")
-        .tooltip("FileHunter — работает в фоне")
+        .tooltip(tray_tooltip())
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, ev| match ev.id().as_ref() {
@@ -1104,7 +1129,7 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
 // ---------- задачи ----------
 
 fn jobs_of(st: &AppState) -> CmdResult<Arc<jobs::Jobs>> {
-    st.jobs.get().cloned().ok_or_else(|| "задачи ещё запускаются".into())
+    st.jobs.get().cloned().ok_or_else(|| tr("Tasks are still starting", "задачи ещё запускаются").into())
 }
 
 #[tauri::command]
@@ -1123,14 +1148,14 @@ fn job_add(
     confirmed: Option<bool>,
 ) -> CmdResult<u64> {
     if !matches!(kind.as_str(), "trash" | "delete" | "copy" | "move" | "download") {
-        return Err(format!("неизвестная задача: {kind}"));
+        return Err(l!("Unknown task: {kind}", "неизвестная задача: {kind}"));
     }
     // удаление (и перемещение, которое удаляет исходники) — только после подтверждения в окне
     if matches!(kind.as_str(), "trash" | "delete" | "move") && confirmed != Some(true) {
-        return Err("удаление не подтверждено".into());
+        return Err(tr("Deletion not confirmed", "удаление не подтверждено").into());
     }
     if items.is_empty() && urls.is_empty() {
-        return Err("нечего делать".into());
+        return Err(tr("Nothing to do", "нечего делать").into());
     }
     Ok(jobs_of(&st)?.add_each(jobs::Job { kind, items, dest, urls, ..Default::default() }))
 }
@@ -1179,7 +1204,7 @@ fn jobs_clear(st: State<Shared>) -> CmdResult<()> {
 // ---------- другие компьютеры ----------
 
 fn p2p_of(st: &AppState) -> CmdResult<Arc<p2p::P2p>> {
-    st.p2p.get().cloned().ok_or_else(|| "Связь ещё запускается, попробуйте через пару секунд".into())
+    st.p2p.get().cloned().ok_or_else(|| tr("The connection is still starting, try again in a couple of seconds", "Связь ещё запускается, попробуйте через пару секунд").into())
 }
 
 #[derive(Serialize)]
@@ -1249,7 +1274,7 @@ fn p2p_share_set(st: State<Shared>, peer: String, share: p2p::Share) -> CmdResul
 
 #[tauri::command]
 async fn p2p_join(st: State<'_, Shared>, code: String) -> CmdResult<String> {
-    Ok(p2p_of(&st)?.join(&code).await?.name)
+    Ok(p2p_of(&st)?.join(&code).await.map_err(|e| p2p::shown(&e))?.name)
 }
 
 #[tauri::command]
@@ -1269,7 +1294,7 @@ async fn p2p_remove(st: State<'_, Shared>, peer: String) -> CmdResult<()> {
 /// Запрос к другому компьютеру — те же команды, что и здесь (sources, browse, …).
 #[tauri::command]
 async fn peer_call(st: State<'_, Shared>, peer: String, method: String, args: serde_json::Value) -> CmdResult<serde_json::Value> {
-    Ok(p2p_of(&st)?.call(&peer, &method, args).await?.0)
+    Ok(p2p_of(&st)?.call(&peer, &method, args).await.map_err(|e| p2p::shown(&e))?.0)
 }
 
 /// Скачивает файл с другого компьютера кусками; прогресс — событием download-progress.
@@ -1281,7 +1306,7 @@ async fn peer_download(app: AppHandle, st: State<'_, Shared>, peer: String, path
     let mut f = std::fs::File::create(&tmp).map_err(err)?;
     let mut offset = 0u64;
     loop {
-        let (meta, bytes) = p.call(&peer, "read", serde_json::json!({ "path": path, "offset": offset })).await?;
+        let (meta, bytes) = p.call(&peer, "read", serde_json::json!({ "path": path, "offset": offset })).await.map_err(|e| p2p::shown(&e))?;
         f.write_all(&bytes).map_err(err)?;
         offset += bytes.len() as u64;
         let size = meta["size"].as_u64().unwrap_or(offset);
@@ -1454,7 +1479,7 @@ async fn s3_test(cfg: S3Config, secret: String, old_name: Option<String>) -> Res
     // сетевой запрос — вне главного потока
     tauri::async_runtime::spawn_blocking(move || s3_check(&cfg, &secret))
         .await
-        .unwrap_or_else(|e| Err(CheckError { message: "Внутренняя ошибка".into(), details: e.to_string() }))
+        .unwrap_or_else(|e| Err(CheckError { message: tr("Internal error", "Внутренняя ошибка").into(), details: e.to_string() }))
 }
 
 /// Сохраняет подключение как есть, без проверки.
@@ -1464,12 +1489,12 @@ fn s3_save(app: AppHandle, st: State<Shared>, cfg: S3Config, secret: String, old
     let cfg = cfg.normalized();
     let name = cfg.name.clone();
     if name.is_empty() || name.contains(['/', '\\', ':']) {
-        return Err("Название не должно быть пустым и содержать / \\ :".into());
+        return Err(tr("The name must not be empty or contain / \\ :", "Название не должно быть пустым и содержать / \\ :").into());
     }
     let mut list = load_s3(&st);
     let old = old_name.unwrap_or_default();
     if list.iter().any(|c| c.name == name && c.name != old) {
-        return Err(format!("Подключение «{name}» уже есть"));
+        return Err(l!("Connection «{name}» already exists", "Подключение «{name}» уже есть"));
     }
     // ключ — в диспетчер учётных данных Windows, остальное — в s3.json
     if let Some(sec) = s3_secret(&secret, &name, &old) {
@@ -1579,7 +1604,7 @@ fn load_dupes(path: &Path, index: &Index) -> Option<DupeReport> {
 fn begin(st: &AppState, what: &'static str) -> CmdResult<()> {
     let mut b = st.busy.lock().unwrap();
     if let Some(cur) = *b {
-        return Err(format!("уже выполняется: {cur}"));
+        return Err(l!("Already running: {cur}", "уже выполняется: {cur}"));
     }
     *b = Some(what);
     st.cancel.store(false, Ordering::Relaxed);
@@ -1631,9 +1656,9 @@ pub(crate) fn run_scan(app: &AppHandle, st: &Arc<AppState>, roots: Vec<String>, 
                         st.etags.lock().unwrap().remove(&root);
                         seg
                     }),
-                    None => Err(anyhow::anyhow!("нет ключа для {root}: откройте «Изменить» и введите Secret Key")),
+                    None => Err(anyhow::Error::msg(l!("No key for {root}: open «Edit» and enter the Secret Key", "нет ключа для {root}: откройте «Изменить» и введите Secret Key"))),
                 },
-                None => Err(anyhow::anyhow!("подключение {root} не найдено")),
+                None => Err(anyhow::Error::msg(l!("Connection {root} not found", "подключение {root} не найдено"))),
             }
         } else {
             scan_walk(Path::new(&root), &opts, &st.cancel, &emit)
@@ -2042,7 +2067,7 @@ fn dup_search(
         flush(true);
         let out = match res {
             Ok(()) => json!({ "id": id }),
-            Err(e) => json!({ "id": id, "error": if stop.load(Ordering::Relaxed) { "остановлено".to_string() } else { e.to_string() } }),
+            Err(e) => json!({ "id": id, "error": if stop.load(Ordering::Relaxed) { tr("Stopped", "остановлено").to_string() } else { e.to_string() } }),
         };
         let _ = app.emit("dup-done", out);
         let mut cur = st.dup_run.lock().unwrap();
@@ -2208,7 +2233,7 @@ fn trash_files(st: State<Shared>, files: Vec<Target>) -> ActionResult {
     let mut removed = st.removed.write().unwrap();
     for f in files {
         if is_protected(Path::new(&f.path)) {
-            res.failed.push(format!("{}: системный файл, удалять нельзя", f.path));
+            res.failed.push(l!("{}: system file, it cannot be deleted", "{}: системный файл, удалять нельзя", f.path));
             continue;
         }
         match trash::delete(&f.path) {
@@ -2230,13 +2255,13 @@ fn trash_files(st: State<Shared>, files: Vec<Target>) -> ActionResult {
 fn hardlink_files(st: State<Shared>, keep: String, files: Vec<Target>) -> ActionResult {
     let mut res = ActionResult { ok: 0, failed: vec![] };
     if is_protected(Path::new(&keep)) {
-        res.failed.push(format!("{keep}: системный файл, ссылаться на него нельзя"));
+        res.failed.push(l!("{keep}: system file, it cannot be linked to", "{keep}: системный файл, ссылаться на него нельзя"));
         return res;
     }
     let mut removed = st.removed.write().unwrap();
     for f in files {
         if is_protected(Path::new(&f.path)) {
-            res.failed.push(format!("{}: системный файл, заменять нельзя", f.path));
+            res.failed.push(l!("{}: system file, it cannot be replaced", "{}: системный файл, заменять нельзя", f.path));
             continue;
         }
         let dst = PathBuf::from(&f.path);
@@ -2268,7 +2293,7 @@ fn hardlink_files(st: State<Shared>, keep: String, files: Vec<Target>) -> Action
 #[tauri::command]
 fn reveal(path: String) -> CmdResult<()> {
     if path.contains("://") {
-        return Err("Это объект в облаке: открыть его в Проводнике нельзя".into());
+        return Err(tr("This is a cloud object: it cannot be shown in Explorer", "Это объект в облаке: открыть его в Проводнике нельзя").into());
     }
     #[cfg(windows)]
     {
@@ -2292,7 +2317,7 @@ fn reveal(path: String) -> CmdResult<()> {
 #[tauri::command]
 fn open_path(path: String) -> CmdResult<()> {
     if path.contains("://") {
-        return Err("Это объект в облаке: открыть его пока нельзя".into());
+        return Err(tr("This is a cloud object: it cannot be opened yet", "Это объект в облаке: открыть его пока нельзя").into());
     }
     #[cfg(windows)]
     std::process::Command::new("explorer.exe").arg(&path).spawn().map_err(err)?;
@@ -2321,6 +2346,10 @@ fn data_dir() -> PathBuf {
 
 fn main() {
     let data_dir = data_dir();
+    // язык, выбранный в прошлый раз (до того, как окно скажет его само)
+    if let Ok(l) = std::fs::read_to_string(data_dir.join("lang.txt")) {
+        filecat_core::lang::set(l.trim());
+    }
     let semantic = semantic::Semantic::new(&data_dir);
     let index_path = data_dir.join("index.bin");
     let index = Index::load(&index_path).unwrap_or_default();
@@ -2422,6 +2451,7 @@ fn main() {
             search_all,
             semantic_search,
             semantic_status,
+            set_lang,
             dup_search,
             dup_sizes,
             dev_log,
@@ -2450,7 +2480,7 @@ fn main() {
             // рядом с установленной: у неё свои вкладки и история (данные встроенного браузера)
             // и заголовок, по которому их не перепутать.
             {
-                let mut cfg = app.config().app.windows.first().cloned().ok_or("нет окна в tauri.conf.json")?;
+                let mut cfg = app.config().app.windows.first().cloned().ok_or(tr("No window in tauri.conf.json", "нет окна в tauri.conf.json"))?;
                 // FILEHUNTER_UI_DIR (dev.bat) — интерфейс из папки проекта: правки видны по F5
                 if std::env::var_os("FILEHUNTER_UI_DIR").is_some() {
                     cfg.url = tauri::WebviewUrl::CustomProtocol(devui::url().parse()?);
@@ -2458,7 +2488,7 @@ fn main() {
                 }
                 let mut w = tauri::WebviewWindowBuilder::from_config(app.handle(), &cfg)?;
                 if std::env::var_os("FILECAT_DATA_DIR").is_some() {
-                    w = w.data_directory(st.data_dir.join("webview")).title("FileHunter — тестовая версия");
+                    w = w.data_directory(st.data_dir.join("webview")).title(tr("FileHunter — test version", "FileHunter — тестовая версия"));
                 }
                 w.build()?;
             }

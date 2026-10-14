@@ -86,7 +86,7 @@ pub async fn sync_peer(app: &AppHandle, st: &Arc<AppState>, p2p: &P2p, peer: &st
     let list: Vec<Item> = match p2p.call(peer, "replica_list", Value::Null).await {
         Ok((v, _)) => serde_json::from_value(v).map_err(|e| e.to_string())?,
         // доступ закрыли — копия больше не наша
-        Err(e) if e.contains(crate::p2p::NO_ACCESS) => {
+        Err(e) if crate::p2p::is_no_access(&e) => {
             forget(st, peer);
             let _ = app.emit("replicas-changed", ());
             return Ok(());
@@ -130,7 +130,7 @@ pub async fn sync_peer(app: &AppHandle, st: &Arc<AppState>, p2p: &P2p, peer: &st
             let (v, chunk) = p2p.call(peer, "replica_get", json!({ "root": it.root, "offset": bytes.len() })).await?;
             let total = v["total"].as_u64().unwrap_or(0) as usize;
             if chunk.is_empty() && bytes.len() < total {
-                return Err("снимок оборвался".into());
+                return Err(filecat_core::lang::tr("The index copy transfer was interrupted", "снимок оборвался").into());
             }
             bytes.extend_from_slice(&chunk);
             if bytes.len() >= total {
@@ -183,7 +183,7 @@ pub fn export(st: &AppState, root: &str, version: u64, fresh: bool) -> Result<Ar
     let (seg, dir) = crate::locate_in(st, root)?;
     let bytes = {
         let idx = st.index.read().unwrap();
-        let s = idx.segments.get(seg as usize).ok_or("источник не найден")?;
+        let s = idx.segments.get(seg as usize).ok_or(filecat_core::lang::tr("Source not found", "источник не найден"))?;
         match dir {
             Some(d) => s.subtree(d).to_bytes(),
             None => s.to_bytes(),

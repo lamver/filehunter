@@ -29,14 +29,16 @@ const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
 
 // ---------- утилиты ----------
+// числа, размеры и даты — по языку интерфейса
+const locale = () => (LANG === 'ru' ? 'ru-RU' : 'en-US');
 const fmtSize = (n) => {
-  const u = ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ'];
+  const u = ['unit.B', 'unit.KB', 'unit.MB', 'unit.GB', 'unit.TB'].map((k) => tr(k));
   let i = 0;
   while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
-  return i === 0 ? `${n} Б` : `${n.toFixed(n < 10 ? 1 : 0)} ${u[i]}`;
+  return i === 0 ? `${n} ${u[0]}` : `${n.toFixed(n < 10 ? 1 : 0)} ${u[i]}`;
 };
-const fmtNum = (n) => n.toLocaleString('ru-RU');
-const fmtDate = (s) => s ? new Date(s * 1000).toLocaleString('ru-RU', {
+const fmtNum = (n) => n.toLocaleString(locale());
+const fmtDate = (s) => s ? new Date(s * 1000).toLocaleString(locale(), {
   day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
 }) : '—';
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -46,7 +48,7 @@ const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
 // Подтверждение действия. Возвращает Promise<boolean>: true — только если нажали кнопку действия.
 // Фокус по умолчанию — на «Отмена», чтобы случайный Enter ничего не сделал.
-function ask(text, { ok = 'Да', danger = false } = {}) {
+function ask(text, { ok = tr('common.yes'), danger = false } = {}) {
   return new Promise((resolve) => {
     const m = $('#ask-modal');
     $('#ask-text').textContent = text;
@@ -123,6 +125,7 @@ window.addEventListener('langchange', () => {
   if (typeof renderTasks === 'function') renderTasks();
   refreshStatus();
   if ($('#tab-about').classList.contains('active')) loadAbout();
+  updRender();
 });
 applyI18n();
 invoke('set_lang', { lang: LANG }).catch(() => {});
@@ -130,9 +133,9 @@ invoke('set_lang', { lang: LANG }).catch(() => {});
 // ---------- статус ----------
 async function refreshStatus() {
   const s = await invoke('status');
-  $('#st-index').textContent = `В индексе ${fmtNum(s.entries)} записей`;
+  $('#st-index').textContent = trn('status.index', s.entries);
   $('#st-watch').textContent = s.watching
-    ? `Слежу за изменениями${s.changes ? ` · обновлено записей: ${fmtNum(s.changes)}` : ''}`
+    ? `${tr('status.watching')}${s.changes ? ` · ${tr('status.changes', { n: fmtNum(s.changes) })}` : ''}`
     : '';
   return s;
 }
@@ -199,40 +202,40 @@ async function loadSources() {
 
 function sourceStatus(s) {
   const now = Date.now() / 1000;
-  if (s.peer && !s.peerOnline) return '<em class="st off">Компьютер не в сети</em>';
-  if (!s.peer && Bz.scanning === s.root) return `<em class="st on">Сканируется${Bz.scanFiles ? `: ${fmtNum(Bz.scanFiles)} файлов` : '…'}</em>`;
-  if (s.kind !== 's3' && s.kind !== 'folder' && !s.online) return `<em class="st off">Отключён${s.disconnected_at ? ' · ' + fmtDate(s.disconnected_at) : ''}</em>`;
-  if (s.queued) return '<em class="st">В очереди на индексацию</em>';
-  if (s.connected_at && now - s.connected_at < RECENT && s.kind !== 's3') return `<em class="st on">Подключён в ${fmtDate(s.connected_at).split(', ')[1]}</em>`;
-  if (!s.indexed) return '<em class="st">Не в индексе</em>';
+  if (s.peer && !s.peerOnline) return `<em class="st off">${tr('src.peerOffline')}</em>`;
+  if (!s.peer && Bz.scanning === s.root) return `<em class="st on">${Bz.scanFiles ? trn('src.scanningN', Bz.scanFiles) : tr('src.scanning')}</em>`;
+  if (s.kind !== 's3' && s.kind !== 'folder' && !s.online) return `<em class="st off">${tr('src.offline')}${s.disconnected_at ? ' · ' + fmtDate(s.disconnected_at) : ''}</em>`;
+  if (s.queued) return `<em class="st">${tr('src.queued')}</em>`;
+  if (s.connected_at && now - s.connected_at < RECENT && s.kind !== 's3') return `<em class="st on">${tr('src.connectedAt', { time: fmtDate(s.connected_at).split(', ')[1] })}</em>`;
+  if (!s.indexed) return `<em class="st">${tr('src.notIndexed')}</em>`;
   return '';
 }
 
 function renderSourceList() {
   const item = (s) => {
     const used = s.total ? Math.round(((s.total - s.free) / s.total) * 100) : 0;
-    const hist = [s.connected_at && `подключён ${fmtDate(s.connected_at)}`, s.disconnected_at && `отключён ${fmtDate(s.disconnected_at)}`].filter(Boolean).join(' · ');
+    const hist = [s.connected_at && tr('src.connected', { date: fmtDate(s.connected_at) }), s.disconnected_at && tr('src.disconnected', { date: fmtDate(s.disconnected_at) })].filter(Boolean).join(' · ');
     return `<div role="button" tabindex="0" class="src-item${s.key === Bz.cur ? ' active' : ''}${s.online ? '' : ' offline'}" data-key="${esc(s.key)}" title="${esc(hist || s.root)}">
       <span class="ico">${ICON[s.kind] || ICON.fixed}</span>
       <span class="txt"><b>${esc(s.title)}</b>
         ${s.total ? `<span class="usage${used > 90 ? ' full' : ''}"><i style="width:${used}%"></i></span>
-          <small>${fmtSize(s.free)} свободно из ${fmtSize(s.total)}</small>` : ''}
-        ${s.kind === 's3' && s.indexed ? `<small>${fmtSize(s.bytes)} · ${fmtNum(s.files)} файлов</small>` : ''}
+          <small>${tr('src.free', { free: fmtSize(s.free), total: fmtSize(s.total) })}</small>` : ''}
+        ${s.kind === 's3' && s.indexed ? `<small>${fmtSize(s.bytes)} · ${trn('common.files', s.files)}</small>` : ''}
         ${sourceStatus(s)}</span>
     </div>`;
   };
   const mine = Bz.sources.filter((s) => !s.peer);
-  let html = (Pz.info.peers.length ? `<div class="grp">${esc(Pz.info.name || 'Этот компьютер')} <span class="muted">· этот</span></div>` : '') + mine.map(item).join('');
+  let html = (Pz.info.peers.length ? `<div class="grp">${esc(Pz.info.name || tr('peer.thisComputer'))} <span class="muted">· ${tr('peer.thisOne')}</span></div>` : '') + mine.map(item).join('');
   // связь с другими компьютерами не запустилась — говорим почему, а не молча прячем устройства
   if (Pz.info.error) {
-    html += `<p class="p2p-err" title="${esc(Pz.info.error)}">Связь с другими компьютерами не запущена: ${esc(Pz.info.error)}. Пробую снова каждые 30 секунд.</p>`;
+    html += `<p class="p2p-err" title="${esc(Pz.info.error)}">${tr('peer.p2pError', { error: esc(Pz.info.error) })}</p>`;
   }
   for (const p of Pz.info.peers) {
     const list = Bz.sources.filter((s) => s.peer === p.id);
     const dir = accessDir(p, list);
     html += `<div class="grp peer" data-peer="${esc(p.id)}" title="${esc(accessHint(p, list))}">
-      <span class="dot ${p.online ? 'on' : ''}"></span><b>${esc(p.name)}</b><span class="dir-ico${dir === '—' ? ' none' : ''}">${dir}</span>${p.outdated ? '<span class="outdated">· нужно обновить FileHunter</span>' : ''}</div>` +
-      (list.length ? list.map(item).join('') : `<p class="grp-empty muted">${p.online ? 'Нет источников' : 'Нет данных — компьютер ещё не был в сети'}</p>`);
+      <span class="dot ${p.online ? 'on' : ''}"></span><b>${esc(p.name)}</b><span class="dir-ico${dir === '—' ? ' none' : ''}">${dir}</span>${p.outdated ? `<span class="outdated">· ${tr('peer.outdated')}</span>` : ''}</div>` +
+      (list.length ? list.map(item).join('') : `<p class="grp-empty muted">${p.online ? tr('peer.noSources') : tr('peer.noData')}</p>`);
   }
   $('#src-list').innerHTML = html;
 }
@@ -251,7 +254,7 @@ const curSource = () => Bz.sources.find((s) => s.key === Bz.cur);
 
 async function openDir(dir, keepSel) {
   const s = curSource();
-  if (!s) { $('#b-list').innerHTML = '<p class="more muted">Источников нет. Нажмите «Добавить источник».</p>'; return; }
+  if (!s) { $('#b-list').innerHTML = `<p class="more muted">${tr('browse.noSources')}</p>`; return; }
   if (s.seg == null || s.other_disk) {
     // источника ещё нет в индексе (или под буквой другой диск) — показываем папку прямо
     // с диска или из S3, не дожидаясь сканирования
@@ -259,7 +262,7 @@ async function openDir(dir, keepSel) {
       Bz.data = null;
       Bz.rows = [];
       $('#b-crumbs').innerHTML = `<span class="crumb cur">${esc(s.root)}</span>`;
-      $('#b-list').innerHTML = `<div class="empty-state"><p><b>${esc(s.peerName)}</b> сейчас не в сети.</p><p class="muted">Включите тот компьютер и запустите на нём FileHunter — источники появятся сами.</p></div>`;
+      $('#b-list').innerHTML = `<div class="empty-state"><p>${tr('browse.peerOffline', { name: `<b>${esc(s.peerName)}</b>` })}</p><p class="muted">${tr('browse.peerOffline.hint')}</p></div>`;
       $('#b-foot').textContent = '';
       return;
     }
@@ -267,7 +270,7 @@ async function openDir(dir, keepSel) {
     Bz.data = null;
     Bz.rows = [];
     $('#b-crumbs').innerHTML = `<span class="crumb cur">${esc(s.title)}</span>`;
-    $('#b-list').innerHTML = `<div class="empty-state"><p><b>${esc(s.title)}</b> отключён и ещё не был в индексе.</p></div>`;
+    $('#b-list').innerHTML = `<div class="empty-state"><p>${tr('browse.offlineNotIndexed', { name: `<b>${esc(s.title)}</b>` })}</p></div>`;
     $('#b-foot').textContent = '';
     return;
   }
@@ -293,7 +296,7 @@ async function refreshS3(s, dir) {
   try { n = await api('s3_refresh', { seg: s.seg, dir }, s); } catch { return; }
   if (n > 0 && Bz.cur === s.key && Bz.dir === dir && !Bz.live && !Bz.busy) {
     await openDir(dir, true);
-    $('#b-foot').textContent += ` · сверено с ${s.kind === 's3' ? 'хранилищем' : 'диском'}: изменений ${fmtNum(n)}`;
+    $('#b-foot').textContent += ` · ${tr(s.kind === 's3' ? 'browse.syncedS3' : 'browse.syncedDisk', { n: fmtNum(n) })}`;
   }
 }
 
@@ -303,12 +306,12 @@ async function openLive(path, keepSel) {
   let data;
   const my = ++Bz.seq;
   Bz.busy = true;
-  if (!keepSel) $('#b-foot').textContent = 'Читаю папку…';
+  if (!keepSel) $('#b-foot').textContent = tr('browse.reading');
   try { data = await api('browse_live', { root: s.root, path }, s); } catch (e) {
     if (my !== Bz.seq) return;
     Bz.busy = false;
-    $('#b-list').innerHTML = `<div class="empty-state"><p>Не удалось открыть папку.</p><p class="muted">${esc(String(e))}</p>
-      ${s.kind === 's3' ? `<div class="btns"><button data-s3edit="${esc(s.title)}">Изменить подключение</button></div>` : ''}</div>`;
+    $('#b-list').innerHTML = `<div class="empty-state"><p>${tr('browse.openFailed')}</p><p class="muted">${esc(String(e))}</p>
+      ${s.kind === 's3' ? `<div class="btns"><button data-s3edit="${esc(s.title)}">${tr('s3.edit')}</button></div>` : ''}</div>`;
     $('#b-foot').textContent = '';
     return;
   }
@@ -357,11 +360,11 @@ function renderCrumbs() {
   // путь текстом, как токены в поиске GitHub: части подсвечены и кликабельны
   $('#b-crumbs').innerHTML = parts.map((p, i) => {
     const data = p.path != null ? `data-path="${esc(p.path)}"` : `data-idx="${p.idx ?? ''}"`;
-    return `<span class="crumb${i === parts.length - 1 ? ' cur' : ''}" ${data} title="Открыть ${esc(p.label)}">${esc(p.label)}</span><span class="sep">${esc(sep)}</span>`;
+    return `<span class="crumb${i === parts.length - 1 ? ' cur' : ''}" ${data} title="${tr('browse.open', { name: esc(p.label) })}">${esc(p.label)}</span><span class="sep">${esc(sep)}</span>`;
   }).join('');
   // длинный путь: видна его конечная часть
   $('#b-crumbs').scrollLeft = $('#b-crumbs').scrollWidth;
-  $('#b-q').placeholder = 'поиск по имени';
+  $('#b-q').placeholder = tr('browse.q.placeholder');
 }
 let crumbTimer = null;
 $('#b-crumbs').addEventListener('click', (e) => {
@@ -388,7 +391,7 @@ function curPath() {
 }
 async function copyText(text, what) {
   try { await window.__TAURI__.clipboardManager.writeText(text); } catch { try { await navigator.clipboard.writeText(text); } catch { return; } }
-  toast(`${what} скопирован: ${text}`);
+  toast(tr('common.copied', { what, text }));
 }
 // двойной щелчок по пути — путь становится обычным текстом (выделен): скопировать, поправить, вставить другой
 const Ed = { on: false, orig: '' };
@@ -410,7 +413,9 @@ function endEdit() {
   if ($('#b-q').value.trim() === Ed.orig || looksLikePath($('#b-q').value.trim())) $('#b-q').value = '';
 }
 $('#b-crumbs').addEventListener('dblclick', (e) => { e.preventDefault(); editPath(); });
-$('#b-crumbs').title = 'Двойной щелчок — путь текстом: скопировать или ввести другой';
+// подсказка переводится вместе с разметкой (applyI18n)
+$('#b-crumbs').dataset.i18nTitle = 'browse.crumbs.title';
+$('#b-crumbs').title = tr('browse.crumbs.title');
 
 // щелчок по свободному месту поля — фокус на ввод
 $('#omni').addEventListener('mousedown', (e) => {
@@ -434,7 +439,7 @@ async function goPath(path, peer = curSource()?.peer) {
   const s = Bz.sources
     .filter((x) => onDevice(x) && x.online && low.startsWith(x.root.toLowerCase().replace(/[\\/]$/, '')))
     .sort((a, b) => b.root.length - a.root.length)[0];
-  if (!s) { toast(`Не найдено: ${path}`); return false; }
+  if (!s) { toast(tr('browse.notFound', { path })); return false; }
   Bz.cur = s.key;
   renderSourceList();
   await openLive(path);
@@ -479,16 +484,16 @@ const Dd = { items: [], sel: -1 };
 // подсказки: пустое поле — недавнее; ввод — подходящее из истории путей и поисков
 function suggestions(q) {
   const low = q.toLowerCase();
-  const peerName = (id) => (id ? Pz.info.peers.find((p) => p.id === id)?.name || 'другой компьютер' : '');
+  const peerName = (id) => (id ? Pz.info.peers.find((p) => p.id === id)?.name || tr('peer.other') : '');
   const paths = loadHist().map((x) => ({ kind: 'path', path: x.path, peer: x.peer || null, dev: peerName(x.peer), key: x.path }));
   const queries = loadKey(QHIST_KEY).map((x) => ({ kind: 'query', q: x.q, where: x.where, peer: x.peer || null, dev: peerName(x.peer), key: `${x.q}\n${x.where}` }));
   if (!q) return [...queries.slice(0, 5), ...paths.slice(0, 8)];
   // «дуб», «dup» — найти дубликаты здесь или на всех дисках
   if (/^(dup|dub|дуб|копи)/i.test(q) && !dupParse(q)) {
     return [
-      { kind: 'dup', tok: 'dup:size', label: 'Одинаковый размер на всех источниках — мгновенно', hint: 'dup:size — копии папок и файлов по размеру, без чтения' },
-      { kind: 'dup', tok: 'dup:', label: `Проверенные копии в «${folderLabel() || 'этой папке'}»`, hint: 'dup: — сравнивает содержимое, крупные первыми' },
-      { kind: 'dup', tok: 'dup:all', label: 'Проверенные копии на всех дисках и в S3', hint: 'dup:all — сравнивает содержимое, крупные первыми' },
+      { kind: 'dup', tok: 'dup:size', label: tr('dup.sug.size'), hint: tr('dup.sug.size.hint') },
+      { kind: 'dup', tok: 'dup:', label: tr('dup.sug.here', { folder: folderLabel() || tr('common.thisFolder') }), hint: tr('dup.sug.here.hint') },
+      { kind: 'dup', tok: 'dup:all', label: tr('dup.sug.all'), hint: tr('dup.sug.all.hint') },
     ];
   }
   if (looksLikePath(q)) {
@@ -511,12 +516,12 @@ function renderDrop() {
   drop.innerHTML = Dd.items.map((x, i) => {
     const icon = D_ICON[x.kind] || D_ICON.dup;
     const body = x.kind === 'dup' ? `<b>${esc(x.label)}</b><small>${esc(x.hint)}</small>`
-      : x.kind === 'go' ? `Перейти: <b>${esc(x.path)}</b>`
+      : x.kind === 'go' ? tr('drop.go', { path: `<b>${esc(x.path)}</b>` })
       : x.kind === 'path' ? `<b>${esc(baseName(x.path.replace(/[\\/]$/, '')) || x.path)}</b><small>${x.dev ? esc(x.dev) + ' · ' : ''}${esc(x.path)}</small>`
-      : `<b>${esc(x.q)}</b><small>${x.where === here ? 'в этой папке' : 'в ' + esc(x.where)}</small>`;
-    const del = x.kind === 'go' || x.kind === 'dup' ? '' : `<span class="del" data-del="${i}" title="Удалить из истории">×</span>`;
+      : `<b>${esc(x.q)}</b><small>${x.where === here ? tr('drop.inThisFolder') : tr('drop.in', { where: esc(x.where) })}</small>`;
+    const del = x.kind === 'go' || x.kind === 'dup' ? '' : `<span class="del" data-del="${i}" title="${tr('drop.forget')}">×</span>`;
     return `<div class="sug" data-i="${i}"><span class="ico">${icon}</span><span class="txt">${body}</span>${del}</div>`;
-  }).join('') + (q ? '' : '<div class="drop-hint">Начните вводить имя — поиск в этой папке и вложенных. Фильтры: ext:mp3 · size:&gt;10mb · type:dir · -слово · dup:size — одинаковые по размеру · dup: — проверенные копии</div>');
+  }).join('') + (q ? '' : `<div class="drop-hint">${tr('drop.hint')}</div>`);
   drop.classList.remove('hidden');
 }
 function markSug() {
@@ -558,10 +563,10 @@ $('#b-q').addEventListener('blur', () => { $('#omni-drop').classList.add('hidden
 const Fz = { query: '', data: null, timer: null, seq: 0, everywhere: false };
 // поиск по смыслу: off — ещё ничего не посчитано, download, indexing, ready, error
 const Sem = { state: 'off', done: 0, total: 0, error: '' };
-const semText = () => Sem.state === 'download' ? 'скачиваю модель (около 470 МБ, один раз)…'
-  : Sem.state === 'indexing' ? `считаю отпечатки имён: ${Sem.total ? Math.floor((Sem.done / Sem.total) * 100) : 0}% (${fmtNum(Sem.done)} из ${fmtNum(Sem.total)})`
-  : Sem.state === 'ready' ? `готов: ${fmtNum(Sem.done)} имён`
-  : Sem.state === 'error' ? `ошибка: ${Sem.error}` : 'начнёт готовиться через минуту после запуска';
+const semText = () => Sem.state === 'download' ? tr('sem.download')
+  : Sem.state === 'indexing' ? tr('sem.indexing', { pct: Sem.total ? Math.floor((Sem.done / Sem.total) * 100) : 0, done: fmtNum(Sem.done), total: fmtNum(Sem.total) })
+  : Sem.state === 'ready' ? trn('sem.ready', Sem.done)
+  : Sem.state === 'error' ? tr('sem.error', { error: Sem.error }) : tr('sem.off');
 invoke('semantic_status').then((x) => Object.assign(Sem, x)).catch(() => {});
 listen('semantic-status', ({ payload }) => {
   Object.assign(Sem, payload);
@@ -638,7 +643,7 @@ async function searchEverywhere(q) {
     if (!it.peer) continue;
     const p = Pz.info.peers.find((x) => x.id === it.peer);
     // компьютер не в сети — показываем по копии, с датой
-    if (!p?.online && it.asof) it.source += ` · на ${fmtDate(it.asof)}`;
+    if (!p?.online && it.asof) it.source += ` · ${tr('search.asOf', { date: fmtDate(it.asof) })}`;
   }
   const covered = new Set(local.covered || []);
   // остальных (старые версии без копий) спрашиваем по сети
@@ -696,7 +701,7 @@ $('#b-q').addEventListener('keydown', async (e) => {
   } else if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'с') && !$('#b-q').value) {
     e.preventDefault();
     const p = curPath();
-    if (p) copyText(p, 'Путь');
+    if (p) copyText(p, tr('common.path'));
   } else if (e.key === 'Escape') {
     if (Ed.on) { $('#b-q').value = ''; endEdit(); $('#b-q').blur(); return; }
     if (open) $('#omni-drop').classList.add('hidden');
@@ -764,8 +769,8 @@ async function runDups(p) {
     renderBrowse();
     return;
   }
-  if (!p.all && s?.peer) { Dz.done = true; Dz.error = 'Дубликаты на другом компьютере — в следующей версии. Сейчас: диски и S3 этого компьютера (dup:all, dup:size).'; renderBrowse(); return; }
-  if (!p.all && (!s || s.seg == null)) { Dz.done = true; Dz.error = 'Этот источник ещё индексируется — поиск дубликатов станет доступен, когда индекс будет готов.'; renderBrowse(); return; }
+  if (!p.all && s?.peer) { Dz.done = true; Dz.error = tr('dup.err.peer'); renderBrowse(); return; }
+  if (!p.all && (!s || s.seg == null)) { Dz.done = true; Dz.error = tr('dup.err.indexing'); renderBrowse(); return; }
   renderBrowse();
   try {
     await invoke('dup_search', { id: Dz.id, scopes: p.all ? [] : [{ seg: s.seg, dir: Bz.dir }], all: p.all, query: p.rest, minSize: dupMin(p.rest), gentle: $('#s-gentle').checked });
@@ -797,11 +802,10 @@ listen('dup-done', ({ payload }) => {
   if (Fz.data?.dups) renderBrowse();
 });
 const wastedOf = (g) => g.size * (g.files.length - 1);
-const plural = (n, one, few, many) => (n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many);
 
 function renderDups() {
   $$('#b-head [data-bsort]').forEach((b) => { b.classList.remove('sorted'); b.dataset.arrow = ''; });
-  $('#b-head [data-bsort="files"]').textContent = 'Где';
+  $('#b-head [data-bsort="files"]').textContent = tr('col.where');
   const groups = [...Dz.groups.values()].sort((a, b) => wastedOf(b) - wastedOf(a) || b.size - a.size);
   // строки — файлы и папки групп подряд; заголовки групп — не строки, их не выделить
   Bz.rows = [];
@@ -809,11 +813,11 @@ function renderDups() {
   for (const g of groups) {
     if (Bz.rows.length >= Bz.shown) break;
     const n = g.files.length;
-    const what = g.is_dir ? `${n} ${plural(n, 'папка', 'папки', 'папок')} по ${fmtSize(g.size)}, в каждой ${fmtNum(g.files_inside)} ${plural(g.files_inside, 'файл', 'файла', 'файлов')}` : `${n} ${plural(n, 'копия', 'копии', 'копий')} по ${fmtSize(g.size)}`;
-    const badge = Dz.bysize ? '<span class="dup-badge maybe" title="Совпал размер. Содержимое не сравнивалось — проверить: dup:all">совпадает размер</span>'
-      : g.exact ? '<span class="dup-badge ok" title="Файлы сравнены целиком">точная копия</span>'
-      : '<span class="dup-badge maybe" title="Совпали начало, конец и 16 кусков по файлу; полная проверка идёт">совпадает по выборке</span>';
-    parts.push(`<div class="dup-head"><span class="ico ${g.is_dir ? 'dir' : ''}">${g.is_dir ? ICON.folder : ICON.file}</span><b>${esc(g.files[0].name)}</b><span class="muted">${what}</span>${badge}${g.files.some((f) => f.cloud) ? '<span class="dup-badge">есть в S3</span>' : ''}<span class="spacer"></span><span class="dup-free">−${fmtSize(wastedOf(g))}</span></div>`);
+    const what = g.is_dir ? `${trn('dup.dirs', n, { size: fmtSize(g.size) })}, ${trn('dup.eachFiles', g.files_inside)}` : trn('dup.copies', n, { size: fmtSize(g.size) });
+    const badge = Dz.bysize ? `<span class="dup-badge maybe" title="${tr('dup.badge.size.title')}">${tr('dup.badge.size')}</span>`
+      : g.exact ? `<span class="dup-badge ok" title="${tr('dup.badge.exact.title')}">${tr('dup.badge.exact')}</span>`
+      : `<span class="dup-badge maybe" title="${tr('dup.badge.sample.title')}">${tr('dup.badge.sample')}</span>`;
+    parts.push(`<div class="dup-head"><span class="ico ${g.is_dir ? 'dir' : ''}">${g.is_dir ? ICON.folder : ICON.file}</span><b>${esc(g.files[0].name)}</b><span class="muted">${what}</span>${badge}${g.files.some((f) => f.cloud) ? `<span class="dup-badge">${tr('dup.badge.s3')}</span>` : ''}<span class="spacer"></span><span class="dup-free">−${fmtSize(wastedOf(g))}</span></div>`);
     for (const f of g.files) {
       const i = Bz.rows.length;
       Bz.rows.push({ ...f, is_dir: !!g.is_dir, size: g.size, files: g.is_dir ? g.files_inside : 1, group: g.id });
@@ -821,41 +825,41 @@ function renderDups() {
         <span class="ico ${g.is_dir ? 'dir' : ''}">${g.is_dir ? ICON.folder : ICON.file}</span>
         <span class="name" title="${esc(f.full)}">${esc(f.name)} <small class="place">${esc(f.place)}</small></span>
         <span class="muted">${f.mtime ? fmtDate(f.mtime) : ''}</span>
-        <span class="muted">${g.is_dir ? 'Папка' : typeOf({ name: f.name })}</span>
+        <span class="muted">${g.is_dir ? tr('common.folder') : typeOf({ name: f.name })}</span>
         <span class="num">${fmtSize(g.size)}</span>
         <span class="num muted" title="${esc(f.source)}">${esc(f.source)}</span></div>`);
     }
   }
   restoreSel();
   const total = groups.reduce((a, g) => a + g.files.length, 0);
-  const more = total > Bz.rows.length ? `<div class="more"><button id="b-more">Показать ещё (${fmtNum(total - Bz.rows.length)})</button></div>` : '';
+  const more = total > Bz.rows.length ? `<div class="more"><button id="b-more">${tr('common.showMore', { n: fmtNum(total - Bz.rows.length) })}</button></div>` : '';
   const empty = Dz.done
-    ? `<p class="more muted">${Dz.error ? esc(Dz.error) : Dz.bysize ? 'Файлов и папок одинакового размера не найдено.' : 'Одинаковых файлов не найдено.'}</p>`
-    : `<p class="more muted">${Dz.bysize ? 'Группирую по размеру…' : 'Ищу одинаковые файлы — крупные первыми. Группы появятся здесь, как только совпадут.'}</p>`;
+    ? `<p class="more muted">${Dz.error ? esc(Dz.error) : Dz.bysize ? tr('dup.none.size') : tr('dup.none')}</p>`
+    : `<p class="more muted">${Dz.bysize ? tr('dup.grouping') : tr('dup.searching')}</p>`;
   $('#b-list').innerHTML = parts.length ? parts.join('') + more : empty;
   $('#b-more')?.addEventListener('click', () => { Bz.shown += 3000; renderBrowse(); });
 
   // низ: что найдено, ход поиска, переключатели
   const freed = groups.reduce((a, g) => a + wastedOf(g), 0);
-  const min = dupMin(dupParse(Fz.query)?.rest || '') > 1 ? ' · файлы от 1 МБ (меньше: size:>0)' : '';
+  const min = dupMin(dupParse(Fz.query)?.rest || '') > 1 ? ` · ${tr('dup.min')}` : '';
   let text;
   if (Dz.bysize) {
     const r = Dz.info;
-    text = r ? `Одинаковый размер на всех источниках: копий папок — ${fmtNum(r.dir_groups)}, групп файлов — ${fmtNum(r.file_groups)} · если это копии, лишнего ${fmtSize(r.potential)} · ${r.ms.toFixed(0)} мс${r.total > r.groups.length ? ` · показаны крупные ${fmtNum(r.groups.length)}` : ''}${min}`
-      : 'Группирую по размеру…';
+    text = r ? `${tr('dup.sizeSummary', { dirs: fmtNum(r.dir_groups), files: fmtNum(r.file_groups), size: fmtSize(r.potential) })} · ${tr('common.ms', { n: r.ms.toFixed(0) })}${r.total > r.groups.length ? ` · ${tr('dup.shownLargest', { n: fmtNum(r.groups.length) })}` : ''}${min}`
+      : tr('dup.grouping');
   } else {
     const p = Dz.progress, pl = Dz.plan;
-    const found = groups.length ? `групп: ${fmtNum(groups.length)} (точных ${fmtNum(groups.filter((g) => g.exact).length)}) · можно освободить ${fmtSize(freed)}` : 'пока не найдено';
-    const prog = Dz.done ? (Dz.error ? ` · ${esc(Dz.error)}` : ` · проверено за ${Math.max(1, Math.round((Date.now() - Dz.started) / 1000))} с`)
-      : p ? ` · проверено ${fmtNum(p.files_done)} из ${fmtNum(p.files)} кандидатов · прочитано ${fmtSize(p.bytes_read)}` : pl ? ` · кандидатов: ${fmtNum(pl.files)}` : ' · подбираю кандидатов…';
-    text = `Дубликаты ${Dz.all ? 'на всех дисках' : `в «${esc(folderLabel())}»`}: ${found}${prog}${min}`;
+    const found = groups.length ? tr('dup.found', { n: fmtNum(groups.length), exact: fmtNum(groups.filter((g) => g.exact).length), size: fmtSize(freed) }) : tr('dup.notYet');
+    const prog = Dz.done ? (Dz.error ? ` · ${esc(Dz.error)}` : ` · ${tr('dup.checkedIn', { n: Math.max(1, Math.round((Date.now() - Dz.started) / 1000)) })}`)
+      : p ? ` · ${tr('dup.progress', { done: fmtNum(p.files_done), total: fmtNum(p.files), size: fmtSize(p.bytes_read) })}` : pl ? ` · ${tr('dup.candidates', { n: fmtNum(pl.files) })}` : ` · ${tr('dup.picking')}`;
+    text = `${Dz.all ? tr('dup.titleAll') : tr('dup.titleHere', { folder: esc(folderLabel()) })}: ${found}${prog}${min}`;
   }
   const btn = (k, t) => `<button data-dup="${k}">${t}</button>`;
   const switches = [
-    !Dz.bysize && btn('size', 'только по размеру (мгновенно)'),
-    (Dz.bysize || !Dz.all) && btn('all', 'проверить на всех дисках'),
-    !Dz.bysize && Dz.all && btn('here', `проверить только в «${esc(folderLabel())}»`),
-    !Dz.done && !Dz.bysize && btn('stop', 'Остановить'),
+    !Dz.bysize && btn('size', tr('dup.btn.size')),
+    (Dz.bysize || !Dz.all) && btn('all', tr('dup.btn.all')),
+    !Dz.bysize && Dz.all && btn('here', tr('dup.btn.here', { folder: esc(folderLabel()) })),
+    !Dz.done && !Dz.bysize && btn('stop', tr('common.stop')),
   ].filter(Boolean).join('');
   $('#b-foot').innerHTML = `${text} ${switches}`;
 }
@@ -882,7 +886,7 @@ function afterNav(changed) {
 }
 
 const extOf = (n) => { const i = n.lastIndexOf('.'); return i > 0 ? n.slice(i + 1).toLowerCase() : ''; };
-const typeOf = (it) => (it.is_dir ? 'Папка' : extOf(it.name) ? extOf(it.name).toUpperCase() : 'Файл');
+const typeOf = (it) => (it.is_dir ? tr('common.folder') : extOf(it.name) ? extOf(it.name).toUpperCase() : tr('common.file'));
 const bKey = {
   name: (it) => it.name.toLowerCase(),
   mtime: (it) => it.mtime,
@@ -901,7 +905,7 @@ function renderBrowse() {
   const k = bKey[Bz.sort.by], d = Bz.sort.desc ? -1 : 1;
   const finding = !!(Fz.query && Fz.data);
   const wide = finding && Fz.data.everywhere;
-  $('#b-head [data-bsort="files"]').textContent = wide ? 'Где' : 'Файлов';
+  $('#b-head [data-bsort="files"]').textContent = wide ? tr('col.where') : tr('col.files');
   const src = finding ? Fz.data.items : Bz.data.items;
   // папки всегда сверху, как в Проводнике
   Bz.rows = src.slice().sort((a, b) => (b.is_dir - a.is_dir) || d * cmp(k(a), k(b)) || cmp(a.name.toLowerCase(), b.name.toLowerCase()));
@@ -910,33 +914,33 @@ function renderBrowse() {
   restoreSel();
   const rows = Bz.rows.slice(0, Bz.shown);
   $('#b-list').innerHTML = rows.length
-    ? rows.map((it, i) => `${i === byName ? `<div class="sem-head">Похоже по смыслу <span class="muted">— найдено не по буквам, а по значению имени</span></div>` : ''}<div class="brow item${it.score != null ? ' sem' : ''}${Bz.sels.has(i) || (!Bz.sels.size && i === Bz.sel) ? ' sel' : ''}${it.hidden ? ' hid' : ''}" data-i="${i}">
+    ? rows.map((it, i) => `${i === byName ? `<div class="sem-head">${tr('sem.head')} <span class="muted">— ${tr('sem.head.hint')}</span></div>` : ''}<div class="brow item${it.score != null ? ' sem' : ''}${Bz.sels.has(i) || (!Bz.sels.size && i === Bz.sel) ? ' sel' : ''}${it.hidden ? ' hid' : ''}" data-i="${i}">
         <span class="ico ${it.is_dir ? 'dir' : ''}">${it.is_dir ? ICON.folder : ICON.file}</span>
         <span class="name" title="${esc(it.place ? joinPath(it.place, it.name) : it.name)}">${esc(it.name)}${it.place ? ` <small class="place">${esc(it.place)}</small>` : ''}</span>
         <span class="muted">${it.mtime ? fmtDate(it.mtime) : ''}</span>
         <span class="muted">${typeOf(it)}</span>
         <span class="num">${it.is_dir && Bz.live ? '' : fmtSize(it.size)}</span>
         <span class="num muted"${wide || it.score != null ? ` title="${esc(it.source || '')}"` : ''}>${wide || it.score != null ? esc(it.source || '') : it.is_dir && !Bz.live ? fmtNum(it.files) : ''}</span></div>`).join('') +
-      (Bz.rows.length > Bz.shown ? `<div class="more"><button id="b-more">Показать ещё (${fmtNum(Bz.rows.length - Bz.shown)})</button></div>` : '')
-    : `<p class="more muted">${finding ? 'Ничего не найдено.' : 'Папка пуста.'}</p>`;
+      (Bz.rows.length > Bz.shown ? `<div class="more"><button id="b-more">${tr('common.showMore', { n: fmtNum(Bz.rows.length - Bz.shown) })}</button></div>` : '')
+    : `<p class="more muted">${finding ? tr('search.nothing') : tr('browse.empty')}</p>`;
   $('#b-more')?.addEventListener('click', () => { Bz.shown += 3000; renderBrowse(); });
   const s = curSource();
   if (finding) {
     const f = Fz.data;
-    const shown = f.total > f.items.length ? ` · показаны первые ${fmtNum(f.items.length)}` : '';
+    const shown = f.total > f.items.length ? ` · ${tr('search.shownFirst', { n: fmtNum(f.items.length) })}` : '';
     const where = f.everywhere
-      ? ` · везде: диски, S3 и подключённые компьютеры · ${f.ms.toFixed(0)} мс${f.failed?.length ? ` · не ответили: ${esc(f.failed.join(', '))}` : ''}${f.error ? ` · ${esc(f.error)}` : ''}`
-      : f.onlyHere ? ' · только в этой папке: источник ещё индексируется' : ` · в «${esc(folderLabel())}» и вложенных · ${f.ms.toFixed(0)} мс`;
-    const btn = f.everywhere ? `<button data-scope="here">искать только в «${esc(folderLabel() || 'этой папке')}»</button>` : '<button data-scope="all">искать везде</button>';
-    const sem = f.sem?.length ? ` · по смыслу: ${fmtNum(f.sem.length)}` : Sem.state === 'indexing' || Sem.state === 'download' ? ` · поиск по смыслу готовится: ${esc(semText())}` : '';
-    $('#b-foot').innerHTML = `Найдено: ${fmtNum(f.total)}${shown}${sem}${where} ${btn}`;
+      ? ` · ${tr('search.everywhere')} · ${tr('common.ms', { n: f.ms.toFixed(0) })}${f.failed?.length ? ` · ${tr('search.noAnswer', { list: esc(f.failed.join(', ')) })}` : ''}${f.error ? ` · ${esc(f.error)}` : ''}`
+      : f.onlyHere ? ` · ${tr('search.onlyHere')}` : ` · ${tr('search.inFolder', { folder: esc(folderLabel()) })} · ${tr('common.ms', { n: f.ms.toFixed(0) })}`;
+    const btn = f.everywhere ? `<button data-scope="here">${tr('search.btn.here', { folder: esc(folderLabel() || tr('common.thisFolder')) })}</button>` : `<button data-scope="all">${tr('search.btn.all')}</button>`;
+    const sem = f.sem?.length ? ` · ${tr('search.semCount', { n: fmtNum(f.sem.length) })}` : Sem.state === 'indexing' || Sem.state === 'download' ? ` · ${tr('search.semPreparing', { state: esc(semText()) })}` : '';
+    $('#b-foot').innerHTML = `${tr('search.found', { n: fmtNum(f.total) })}${shown}${sem}${where} ${btn}`;
     return;
   }
   const dirs = Bz.data.items.filter((x) => x.is_dir).length;
-  $('#b-foot').textContent = `Папок: ${fmtNum(dirs)} · файлов: ${fmtNum(Bz.data.items.length - dirs)}` +
-    (Bz.live ? " · прочитано напрямую; размеры папок появятся, когда закончится индексирование в фоне" : ` · всего внутри ${fmtSize(Bz.data.size)}, ${fmtNum(Bz.data.files)} файлов`) +
-    (Bz.data.total > Bz.data.items.length ? ` · показаны первые ${fmtNum(Bz.data.items.length)} из ${fmtNum(Bz.data.total)}` : '') +
-    (s && !s.online ? ' · диск отключён, показано по индексу' : '');
+  $('#b-foot').textContent = tr('browse.counts', { dirs: fmtNum(dirs), files: fmtNum(Bz.data.items.length - dirs) }) +
+    (Bz.live ? ` · ${tr('browse.live')}` : ` · ${trn('browse.total', Bz.data.files, { size: fmtSize(Bz.data.size) })}`) +
+    (Bz.data.total > Bz.data.items.length ? ` · ${tr('browse.shownFirstOf', { n: fmtNum(Bz.data.items.length), total: fmtNum(Bz.data.total) })}` : '') +
+    (s && !s.online ? ` · ${tr('browse.offlineFromIndex')}` : '');
 }
 $$('#b-head [data-bsort]').forEach((b) => b.addEventListener('click', () => {
   const by = b.dataset.bsort;
@@ -955,11 +959,11 @@ async function openFile(it) {
   const path = itemPath(it);
   const peer = it.full ? it.peer : s.peer;
   if (!peer) { call('open_path', { path }); return; }
-  toast(`Скачиваю ${it.name}…`, 60000);
-  try { await invoke('peer_open', { peer, path }); toast(`Открыт: ${it.name}`); } catch (e) { toast(String(e), 8000); }
+  toast(tr('file.downloading', { name: it.name }), 60000);
+  try { await invoke('peer_open', { peer, path }); toast(tr('file.opened', { name: it.name })); } catch (e) { toast(String(e), 8000); }
 }
 async function downloadFile(it) {
-  const dir = await window.__TAURI__.dialog.open({ directory: true, title: 'Куда сохранить' });
+  const dir = await window.__TAURI__.dialog.open({ directory: true, title: tr('file.saveTo') });
   if (typeof dir !== 'string') return;
   try {
     await invoke('job_add', { kind: 'copy', items: [locOf(it)], dest: { peer: null, path: dir }, urls: [] });
@@ -967,7 +971,7 @@ async function downloadFile(it) {
   } catch (e) { toast(String(e), 8000); }
 }
 listen('download-progress', ({ payload: p }) => {
-  if (p.size) toast(`Скачиваю ${baseName(p.path)}: ${Math.floor((p.done / p.size) * 100)}% из ${fmtSize(p.size)}`, 60000);
+  if (p.size) toast(tr('file.downloadProgress', { name: baseName(p.path), pct: Math.floor((p.done / p.size) * 100), size: fmtSize(p.size) }), 60000);
 });
 
 const itemPath = (it) => it.full || joinPath(it.place ? joinPath(Bz.data.path, it.place) : Bz.data.path, it.name);
@@ -1018,22 +1022,22 @@ function renderDetails() {
   const path = itemPath(it);
   const local = it.full ? !it.cloud : !Bz.data.remote;
   box.innerHTML = `
-    <button class="d-close" data-dact="close" title="Закрыть (Esc)" aria-label="Закрыть">✕</button>
+    <button class="d-close" data-dact="close" title="${tr('details.close.title')}" aria-label="${tr('common.close')}">✕</button>
     <div class="d-preview" id="d-preview"><span class="ico big ${it.is_dir ? 'dir' : ''}">${it.is_dir ? ICON.folder : ICON.file}</span></div>
     <div class="d-name">${esc(it.name)}</div>
     <dl>
-      <dt>Тип</dt><dd>${typeOf(it)}</dd>
-      <dt>${it.is_dir ? 'Размер содержимого' : 'Размер'}</dt><dd>${it.is_dir && Bz.live ? '—' : `${fmtSize(it.size)}${it.size >= 1024 ? ` <span class="muted">(${fmtNum(it.size)} Б)</span>` : ''}`}</dd>
-      ${it.is_dir && !Bz.live ? `<dt>Файлов внутри</dt><dd>${fmtNum(it.files)}</dd>` : ''}
-      <dt>Изменён</dt><dd>${it.mtime ? fmtDate(it.mtime) : '—'}</dd>
-      <dt>Путь</dt><dd class="d-path">${esc(path)}</dd>
+      <dt>${tr('col.type')}</dt><dd>${typeOf(it)}</dd>
+      <dt>${it.is_dir ? tr('details.contentSize') : tr('col.size')}</dt><dd>${it.is_dir && Bz.live ? '—' : `${fmtSize(it.size)}${it.size >= 1024 ? ` <span class="muted">(${fmtNum(it.size)} ${tr('unit.B')})</span>` : ''}`}</dd>
+      ${it.is_dir && !Bz.live ? `<dt>${tr('details.filesInside')}</dt><dd>${fmtNum(it.files)}</dd>` : ''}
+      <dt>${tr('col.mtime')}</dt><dd>${it.mtime ? fmtDate(it.mtime) : '—'}</dd>
+      <dt>${tr('common.path')}</dt><dd class="d-path">${esc(path)}</dd>
     </dl>
     <div class="d-actions">
-      ${!it.is_dir && local ? `<button data-dact="open" title="${s.peer ? 'Скачать во временную папку и открыть' : 'Открыть в программе по умолчанию'}">Открыть</button>` : ''}
-      ${!it.is_dir && local && s.peer ? '<button data-dact="download" title="Сохранить файл на этот компьютер">Скачать…</button>' : ''}
-      ${!it.is_dir && local && !s.peer ? '<button data-dact="reveal" title="Открыть папку с файлом в Проводнике и выделить его">Показать в Проводнике</button>' : ''}
-      ${it.is_dir && local && !s.peer ? '<button data-dact="open" title="Открыть эту папку в Проводнике Windows">Открыть в Проводнике</button>' : ''}
-      <button data-dact="copy">Копировать путь</button>
+      ${!it.is_dir && local ? `<button data-dact="open" title="${s.peer ? tr('details.open.peer.title') : tr('details.open.title')}">${tr('common.open')}</button>` : ''}
+      ${!it.is_dir && local && s.peer ? `<button data-dact="download" title="${tr('details.download.title')}">${tr('common.download')}</button>` : ''}
+      ${!it.is_dir && local && !s.peer ? `<button data-dact="reveal" title="${tr('details.reveal.title')}">${tr('common.reveal')}</button>` : ''}
+      ${it.is_dir && local && !s.peer ? `<button data-dact="open" title="${tr('details.openDir.title')}">${tr('common.openExplorer')}</button>` : ''}
+      <button data-dact="copy">${tr('common.copyPath')}</button>
     </div>`;
   if (!it.is_dir) loadPreview(s, path, it.size);
 }
@@ -1042,7 +1046,7 @@ async function loadPreview(src, path, size) {
   const my = ++Pv.seq;
   const spot = $('#d-preview');
   if (spot && /\.(jpe?g|png|gif|webp|bmp|svg|ico|txt|md|log|json|csv|xml|ya?ml|ini|toml|js|ts|py|rs|html|css|sql|sh|bat|ps1|cfg|conf|env)$/i.test(path)) {
-    spot.insertAdjacentHTML('beforeend', '<small class="muted pv-wait">Загружаю превью…</small>');
+    spot.insertAdjacentHTML('beforeend', `<small class="muted pv-wait">${tr('preview.loading')}</small>`);
   }
   const cacheKey = keyOf(src) + '>' + path;
   let pv = Pv.cache.get(cacheKey);
@@ -1060,13 +1064,13 @@ async function loadPreview(src, path, size) {
     // картинка грузится сама (для S3 — по временной ссылке); пока грузится — подпись
     const img = new Image();
     img.alt = '';
-    box.insertAdjacentHTML('beforeend', '<small class="muted pv-wait">Загружаю превью…</small>');
+    box.insertAdjacentHTML('beforeend', `<small class="muted pv-wait">${tr('preview.loading')}</small>`);
     img.onload = () => { if (my === Pv.seq) box.replaceChildren(img); };
-    img.onerror = () => { if (my === Pv.seq) { box.querySelector('.pv-wait')?.remove(); box.insertAdjacentHTML('beforeend', '<small class="muted">Не удалось загрузить картинку</small>'); Pv.cache.delete(cacheKey); } };
+    img.onerror = () => { if (my === Pv.seq) { box.querySelector('.pv-wait')?.remove(); box.insertAdjacentHTML('beforeend', `<small class="muted">${tr('preview.imgFailed')}</small>`); Pv.cache.delete(cacheKey); } };
     img.src = pv.data;
   }
   else if (pv.kind === 'text') box.innerHTML = `<pre>${esc(pv.data)}</pre>`;
-  else if (pv.kind === 'toobig') box.insertAdjacentHTML('beforeend', '<small class="muted">Файл больше 20 МБ — без предпросмотра</small>');
+  else if (pv.kind === 'toobig') box.insertAdjacentHTML('beforeend', `<small class="muted">${tr('preview.tooBig')}</small>`);
   else if (pv.kind === 'error') box.insertAdjacentHTML('beforeend', `<small class="muted">${esc(pv.data)}</small>`);
 }
 $('#b-details').addEventListener('click', (e) => {
@@ -1078,7 +1082,7 @@ $('#b-details').addEventListener('click', (e) => {
   if (b.dataset.dact === 'open') openFile(it);
   else if (b.dataset.dact === 'download') downloadFile(it);
   else if (b.dataset.dact === 'reveal') call('reveal', { path });
-  else if (b.dataset.dact === 'copy') navigator.clipboard.writeText(path).then(() => toast('Путь скопирован'));
+  else if (b.dataset.dact === 'copy') navigator.clipboard.writeText(path).then(() => toast(tr('common.pathCopied')));
 });
 
 function activate(i) {
@@ -1134,32 +1138,28 @@ $('#src-list').addEventListener('contextmenu', (e) => {
   const remote = !!s.peer;
   const reach = !remote || s.peerOnline;
   showMenu(e, [
-    !remote && Bz.scanning === s.root && ['Остановить сканирование', () => invoke('cancel')],
-    !remote && s.online && Bz.scanning !== s.root && [s.indexed ? 'Пересканировать' : 'Сканировать', () => startScan([s.root])],
-    reach && ['Переименовать', () => renameInline(b, s.title, async (name) => {
+    !remote && Bz.scanning === s.root && [tr('ctx.stopScan'), () => invoke('cancel')],
+    !remote && s.online && Bz.scanning !== s.root && [s.indexed ? tr('ctx.rescan') : tr('ctx.scan'), () => startScan([s.root])],
+    reach && [tr('ctx.rename'), () => renameInline(b, s.title, async (name) => {
       await api('source_rename', { root: s.root, name }, s);
       // переименованное подключение S3 меняет корень — следим, чтобы выбор не потерялся
       if (s.kind === 's3' && name && Bz.cur === s.key) Bz.cur = remote ? `${s.peer}|s3://${name}` : `s3://${name}`;
       await loadSources();
     })],
-    !remote && s.kind === 's3' && ['Изменить подключение', () => openModal('s3', s.title)],
-    !remote && s.kind !== 's3' && s.online && ['Открыть в Проводнике', () => call('open_path', { path: s.root })],
-    reach && ['Удалить…', () => removeSource(s)],
+    !remote && s.kind === 's3' && [tr('s3.edit'), () => openModal('s3', s.title)],
+    !remote && s.kind !== 's3' && s.online && [tr('common.openExplorer'), () => call('open_path', { path: s.root })],
+    reach && [tr('ctx.remove'), () => removeSource(s)],
   ]);
 });
 
 // подтверждение с понятным описанием, что именно произойдёт
 async function removeSource(s) {
-  const where = s.peer ? ` на компьютере «${s.peerName}»` : '';
-  const what = s.kind === 's3'
-    ? `Подключение «${s.title}» будет удалено${where}, ключ — стёрт из Windows. Его файлы пропадут из FileHunter.\n\nВ самом хранилище ничего не изменится.`
-    : s.kind === 'folder'
-      ? `Папка «${s.title}» будет убрана из FileHunter${where}.\n\nСами файлы на диске не затрагиваются.`
-      : `Диск «${s.title}» будет убран из индекса и скрыт из списка${where}. Вернуть: «Добавить источник» → «Папка или диск».\n\nСами файлы на диске не затрагиваются.`;
-  if (!(await ask(`Удалить источник «${s.title}»?\n\n${what}`, { ok: 'Удалить', danger: true }))) return;
+  const where = s.peer ? ` ${tr('common.onComputer', { name: s.peerName })}` : '';
+  const what = tr(s.kind === 's3' ? 'remove.s3' : s.kind === 'folder' ? 'remove.folder' : 'remove.drive', { title: s.title, where });
+  if (!(await ask(tr('remove.ask', { title: s.title, what }), { ok: tr('remove.ok'), danger: true }))) return;
   try { await api('source_remove', { root: s.root }, s); } catch (e) { toast(String(e), 6000); return; }
   if (Bz.cur === s.key) { Bz.cur = null; Bz.data = null; }
-  toast(`Удалено: ${s.title}`);
+  toast(tr('remove.done', { title: s.title }));
   await loadSources();
   refreshStatus();
 }
@@ -1197,8 +1197,8 @@ $('#b-list').addEventListener('contextmenu', (e) => {
     // пустое место — вставка и загрузка сюда
     if (!Bz.data || Fz.query) return;
     showMenu(e, [
-      Clip.items.length && [`Вставить (${Clip.items.length})  Ctrl+V`, clipPaste],
-      ['Загрузить по ссылке сюда…', downloadDialog],
+      Clip.items.length && [tr('ctx.paste', { n: Clip.items.length }), clipPaste],
+      [tr('ctx.downloadHere'), downloadDialog],
     ]);
     return;
   }
@@ -1207,16 +1207,16 @@ $('#b-list').addEventListener('contextmenu', (e) => {
   const local = !Bz.data.remote;
   const many = Bz.sels.size > 1;
   showMenu(e, [
-    ['Копировать  Ctrl+C', () => clipSet('copy')],
-    ['Вырезать  Ctrl+X', () => clipSet('cut')],
-    it.is_dir && Clip.items.length && !many && [`Вставить в «${it.name}»`, () => { const d = { peer: curSource()?.peer || null, path: itemPath(it) }; invoke('job_add', { kind: Clip.op === 'cut' ? 'move' : 'copy', items: Clip.items.map(({ peer, path }) => ({ peer, path })), dest: d, urls: [], confirmed: true }).then(() => jobAdded()).catch((er) => toast(String(er), 6000)); }],
-    [many ? `Удалить ${Bz.sels.size} в корзину  Delete` : 'Удалить  Delete', () => deleteSelected(false)],
-    [many ? `Удалить ${Bz.sels.size} навсегда…  Shift+Delete` : 'Удалить навсегда…  Shift+Delete', () => deleteSelected(true)],
-    ['Открыть', () => activate(+r.dataset.i)],
-    it.is_dir && ['Открыть в новой вкладке', () => tabNew(itemPath(it))],
-    local && !curSource().peer && ['Показать в Проводнике', () => call('reveal', { path: itemPath(it) })],
-    !it.is_dir && local && curSource().peer && ['Скачать…', () => downloadFile(it)],
-    ['Копировать путь', () => navigator.clipboard.writeText(itemPath(it)).then(() => toast('Путь скопирован'))],
+    [tr('ctx.copy'), () => clipSet('copy')],
+    [tr('ctx.cut'), () => clipSet('cut')],
+    it.is_dir && Clip.items.length && !many && [tr('ctx.pasteInto', { name: it.name }), () => { const d = { peer: curSource()?.peer || null, path: itemPath(it) }; invoke('job_add', { kind: Clip.op === 'cut' ? 'move' : 'copy', items: Clip.items.map(({ peer, path }) => ({ peer, path })), dest: d, urls: [], confirmed: true }).then(() => jobAdded()).catch((er) => toast(String(er), 6000)); }],
+    [many ? tr('ctx.trashN', { n: Bz.sels.size }) : tr('ctx.trash'), () => deleteSelected(false)],
+    [many ? tr('ctx.deleteN', { n: Bz.sels.size }) : tr('ctx.delete'), () => deleteSelected(true)],
+    [tr('common.open'), () => activate(+r.dataset.i)],
+    it.is_dir && [tr('ctx.openNewTab'), () => tabNew(itemPath(it))],
+    local && !curSource().peer && [tr('common.reveal'), () => call('reveal', { path: itemPath(it) })],
+    !it.is_dir && local && curSource().peer && [tr('common.download'), () => downloadFile(it)],
+    [tr('common.copyPath'), () => navigator.clipboard.writeText(itemPath(it)).then(() => toast(tr('common.pathCopied')))],
   ]);
 });
 document.addEventListener('click', (e) => {
@@ -1235,7 +1235,7 @@ async function startScan(roots) {
 
 // подключение и отключение дисков
 listen('drives-changed', async ({ payload: events }) => {
-  for (const ev of events || []) toast(`${ev.connected ? 'Подключён' : 'Отключён'}: ${ev.title}`, 5000);
+  for (const ev of events || []) toast(tr(ev.connected ? 'drive.connected' : 'drive.disconnected', { title: ev.title }), 5000);
   if (!$('#tab-sources').classList.contains('active')) return;
   if (events && events.length) { await loadSources(); return; }
   Bz.sources = await fetchSources();
@@ -1261,15 +1261,15 @@ async function openModal(type, s3name) {
   }
   $('#m-back').classList.toggle('hidden', !type || !!s3name);
   $$('.m-status').forEach((x) => { x.textContent = ''; });
-  $('#m-title').textContent = !type ? 'Добавить источник' : type === 'local' ? 'Папка или диск' : type === 'peer' ? 'Другой компьютер' : s3name ? `Подключение «${s3name}»` : 'Подключение S3';
+  $('#m-title').textContent = !type ? tr('add.title') : type === 'local' ? tr('add.local') : type === 'peer' ? tr('add.peer') : s3name ? tr('s3.title.edit', { name: s3name }) : tr('s3.title');
   if (type === 'local') { $('#m-local').reset(); $('#m-local [name=path]').focus(); }
   if (type === 's3') {
     const f = $('#s3-form');
     f.reset();
     s3Editing = s3name || null;
     f.elements.secret.type = 'password';
-    $('#s3-eye').textContent = 'Показать';
-    f.elements.secret.placeholder = s3name ? 'сохранён — оставьте пустым, чтобы не менять' : '';
+    $('#s3-eye').textContent = tr('s3.show');
+    f.elements.secret.placeholder = s3name ? tr('s3.secret.saved') : '';
     s3Result(null);
     if (s3name) {
       const c = (await invoke('s3_list')).find((x) => x.name === s3name);
@@ -1314,17 +1314,17 @@ function s3Result(kind, message, details) {
 $('#s3-eye').addEventListener('click', () => {
   const i = $('#s3-form').elements.secret;
   i.type = i.type === 'password' ? 'text' : 'password';
-  $('#s3-eye').textContent = i.type === 'password' ? 'Показать' : 'Скрыть';
+  $('#s3-eye').textContent = i.type === 'password' ? tr('s3.show') : tr('s3.hide');
 });
 $('#s3-cancel').addEventListener('click', closeModal);
 // «Проверить» — проверяет то, что введено сейчас, ничего не сохраняя
 $('#s3-test').addEventListener('click', async () => {
   const { cfg, secret } = s3Values();
   $('#s3-test').disabled = true;
-  s3Result('busy', 'Проверяю подключение…');
+  s3Result('busy', tr('s3.testing'));
   try {
     await invoke('s3_test', { cfg, secret, oldName: s3Editing });
-    s3Result('ok', '✓ Подключение работает: список файлов бакета доступен');
+    s3Result('ok', tr('s3.ok'));
   } catch (e) {
     s3Result('bad', e.message || String(e), e.details);
   } finally {
@@ -1345,7 +1345,7 @@ $('#s3-form').addEventListener('submit', async (e) => {
   Bz.cur = `s3://${cfg.name}`;
   Bz.dir = null;
   await loadSources();
-  toast(`Сохранено: ${cfg.name}`);
+  toast(tr('common.saved', { name: cfg.name }));
 });
 
 // выбор папки через системный диалог
@@ -1362,15 +1362,15 @@ listen('scan-progress', ({ payload: p }) => {
   // статус в левой панели обновляем не чаще раза в секунду
   if (first) renderSourceList();
   else if (!sideTimer) sideTimer = setTimeout(() => { sideTimer = null; renderSourceList(); }, 1000);
-  const txt = `${p.root}: ${fmtNum(p.files)} файлов, ${fmtNum(p.dirs)} папок, ${fmtSize(p.bytes)}`;
-  $('#st-task').textContent = `Сканирование — ${txt}`;
+  const txt = `${p.root}: ${trn('common.files', p.files)}, ${trn('common.folders', p.dirs)}, ${fmtSize(p.bytes)}`;
+  $('#st-task').textContent = tr('scan.progress', { txt });
 });
 listen('scan-done', async ({ payload: error }) => {
   Bz.scanning = null;
   Bz.scanFiles = 0;
   $('#st-task').textContent = '';
-  if (error) toast(error === 'scan cancelled' ? 'Сканирование остановлено' : error);
-  else toast('Индекс обновлён');
+  if (error) toast(error === 'scan cancelled' ? tr('scan.stopped') : error);
+  else toast(tr('scan.done'));
   await loadSources();
   await refreshStatus();
 });
@@ -1391,30 +1391,35 @@ async function loadAbout() {
   const a = await invoke('about');
   $('#a-version').textContent = a.version;
   $('#a-data').textContent = a.data_dir;
-  $("#a-index").textContent = `записей: ${fmtNum(a.entries)} · источников: ${a.sources} · файл индекса ${fmtSize(a.index_bytes)}`;
+  $("#a-index").textContent = tr('about.indexInfo', { entries: fmtNum(a.entries), sources: a.sources, size: fmtSize(a.index_bytes) });
   $('#a-sem').textContent = semText();
 }
 $('#a-open').addEventListener('click', () => call('open_path', { path: $('#a-data').textContent }));
 $('#a-repo').addEventListener('click', (e) => { e.preventDefault(); call('open_repo'); });
 
 // ---------- обновления: GitHub Releases, подпись проверяется перед установкой ----------
-const Up = { found: null, busy: false };
-function updMsg(text) { $('#a-upd-msg').textContent = text; }
+const Up = { found: null, busy: false, msg: null };
+// сообщение — функцией, чтобы при смене языка перерисовать его на новом
+function updMsg(m) { Up.msg = typeof m === 'function' ? m : () => m; $('#a-upd-msg').textContent = Up.msg(); }
+function updRender() {
+  if (Up.msg) $('#a-upd-msg').textContent = Up.msg();
+  $('#a-upd').textContent = Up.found ? tr('update.install') : tr('update.check');
+}
 async function updCheck(quiet) {
   if (Up.busy) return;
   Up.busy = true;
-  if (!quiet) updMsg('Проверяю…');
+  if (!quiet) updMsg(() => tr('update.checking'));
   try {
     const u = await invoke('update_check');
     Up.found = u.version ? u : null;
     if (Up.found) {
-      updMsg(`Доступна версия ${u.version}${u.date ? ' от ' + u.date : ''}`);
-      $('#a-upd').textContent = 'Установить и перезапустить';
+      updMsg(() => (u.date ? tr('update.availableDate', { version: u.version, date: u.date }) : tr('update.available', { version: u.version })));
+      $('#a-upd').textContent = tr('update.install');
       $('#a-upd-notes').textContent = u.notes || '';
       $('#a-upd-notes').classList.toggle('hidden', !u.notes);
       $('#menu-btn').classList.add('has-update');
     } else if (!quiet) {
-      updMsg(`У вас последняя версия (${u.current})`);
+      updMsg(() => tr('update.latest', { version: u.current }));
     }
   } catch (e) {
     if (!quiet) updMsg(String(e));
@@ -1424,10 +1429,10 @@ async function updCheck(quiet) {
 }
 async function updInstall() {
   if (Up.busy) return;
-  if (!(await ask(`Установить FileHunter ${Up.found.version}? Программа закроется и запустится снова — задачи в работе прервутся.`, { ok: 'Установить' }))) return;
+  if (!(await ask(tr('update.ask', { version: Up.found.version }), { ok: tr('update.ok') }))) return;
   Up.busy = true;
   $('#a-upd').disabled = true;
-  updMsg('Скачиваю…');
+  updMsg(() => tr('update.downloading'));
   try {
     await invoke('update_install');
   } catch (e) {
@@ -1438,7 +1443,7 @@ async function updInstall() {
 }
 $('#a-upd').addEventListener('click', () => (Up.found ? updInstall() : updCheck(false)));
 listen('update-progress', ({ payload: p }) => {
-  updMsg(p.total ? `Скачиваю… ${Math.floor((p.done / p.total) * 100)}%` : `Скачиваю… ${fmtSize(p.done)}`);
+  updMsg(() => tr('update.downloadingN', { n: p.total ? `${Math.floor((p.done / p.total) * 100)}%` : fmtSize(p.done) }));
 });
 // тихая проверка вскоре после запуска и раз в сутки: только метка на вкладке «О программе»
 setTimeout(() => updCheck(true), 15000);
@@ -1477,8 +1482,8 @@ function tabCapture() {
 function renderTabs() {
   $('#ftabs').innerHTML = Tb.list.map((t) => `
     <div class="ftab${t.id === Tb.active && $('#tab-sources').classList.contains('active') ? ' active' : ''}" data-id="${t.id}" title="${esc(t.path || '')}">
-      <span class="t">${esc(t.title || 'Новая вкладка')}</span>
-      ${Tb.list.length > 1 ? `<span class="x" data-close="${t.id}" title="Закрыть вкладку (Ctrl+W)">✕</span>` : ''}
+      <span class="t">${esc(t.title || tr('tabs.new'))}</span>
+      ${Tb.list.length > 1 ? `<span class="x" data-close="${t.id}" title="${tr('tabs.close.title')}">✕</span>` : ''}
     </div>`).join('');
 }
 
@@ -1587,12 +1592,12 @@ function clipSet(op) {
   // пути — и в системный буфер: так понятно, что скопировано последним (файлы здесь или ссылка где-то ещё)
   Clip.text = Clip.items.map((x) => x.path).join('\n');
   window.__TAURI__?.clipboardManager?.writeText(Clip.text).catch(() => {});
-  toast(`${op === 'cut' ? 'Вырезано' : 'Скопировано'}: ${items.length === 1 ? items[0].name : items.length + ' объектов'}. Откройте папку и нажмите Ctrl+V.`);
+  toast(tr(op === 'cut' ? 'clip.cut' : 'clip.copied', { what: items.length === 1 ? items[0].name : trn('common.items', items.length) }));
 }
 async function clipPaste() {
   const dest = hereLoc();
   if (!Clip.items.length || !dest) return;
-  if (Fz.query) { toast('Сначала очистите поиск — вставка идёт в открытую папку'); return; }
+  if (Fz.query) { toast(tr('clip.clearSearch')); return; }
   const kind = Clip.op === 'cut' ? 'move' : 'copy';
   try {
     await invoke('job_add', { kind, items: Clip.items.map(({ peer, path }) => ({ peer, path })), dest, urls: [], confirmed: true });
@@ -1608,17 +1613,17 @@ async function deleteSelected(forever) {
   const s = curSource();
   const cloud = items.some((it) => itemPath(it).startsWith('s3://'));
   const peerOf = items[0].full ? items[0].peer : s.peer;
-  const where = peerOf ? ` на компьютере «${Pz.info.peers.find((p) => p.id === peerOf)?.name || s.peerName || 'другом'}»` : '';
+  const where = peerOf ? ` ${tr('common.onComputer', { name: Pz.info.peers.find((p) => p.id === peerOf)?.name || s.peerName || tr('common.otherShort') })}` : '';
   const bytes = items.reduce((a, it) => a + (it.size || 0), 0);
   // у дубликатов имена одинаковые — показываем, какие именно копии
   const what = items[0].full
-    ? (items.length === 1 ? items[0].full : `${items.length} файлов:\n${items.slice(0, 6).map((it) => it.full).join('\n')}${items.length > 6 ? '\n…' : ''}`)
-    : items.length === 1 ? `«${items[0].name}»` : `${items.length} объектов`;
+    ? (items.length === 1 ? items[0].full : `${trn('common.files', items.length)}:\n${items.slice(0, 6).map((it) => it.full).join('\n')}${items.length > 6 ? '\n…' : ''}`)
+    : items.length === 1 ? tr('common.quoted', { name: items[0].name }) : trn('common.items', items.length);
   // в S3 корзины нет — там удаление всегда навсегда
   if (forever || cloud) {
-    const why = cloud && !forever ? '\n\nЭто объекты хранилища S3: корзины там нет, удаление будет безвозвратным.' : '';
-    if (!(await ask(`Удалить навсегда ${what}${where}?\n\nЗанимает: ${fmtSize(bytes)}. Восстановить будет нельзя.${why}`, { ok: 'Удалить навсегда', danger: true }))) return;
-  } else if (!(await ask(`Переместить в корзину ${what}${where}?`, { ok: 'В корзину' }))) return;
+    const why = cloud && !forever ? `\n\n${tr('del.s3')}` : '';
+    if (!(await ask(tr('del.forever.ask', { what, where, size: fmtSize(bytes) }) + why, { ok: tr('del.forever.ok'), danger: true }))) return;
+  } else if (!(await ask(tr('del.trash.ask', { what, where }), { ok: tr('del.trash.ok') }))) return;
   try {
     await invoke('job_add', { kind: forever || cloud ? 'delete' : 'trash', items: items.map(locOf), dest: null, urls: [], confirmed: true });
     jobAdded();
@@ -1638,7 +1643,7 @@ $('#dl-cancel').addEventListener('click', () => $('#dl-modal').classList.add('hi
 $('#dl-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const urls = $('#dl-urls').value.split(/\s+/).map((u) => u.trim()).filter((u) => /^https?:\/\//i.test(u));
-  if (!urls.length) { toast('Вставьте ссылки, начинающиеся с http:// или https://'); return; }
+  if (!urls.length) { toast(tr('dl.noLinks')); return; }
   try {
     await invoke('job_add', { kind: 'download', items: [], dest: hereLoc(), urls });
     $('#dl-modal').classList.add('hidden');
@@ -1660,22 +1665,23 @@ $('#b-list').addEventListener('keydown', (e) => {
 const TK = { list: [], open: false, height: 200 };
 try { TK.height = +localStorage.getItem('filecat.tasksH') || 200; TK.open = localStorage.getItem('filecat.tasksShown') === '1'; } catch { /* недоступно */ }
 const ACTIVE = ['queued', 'running', 'paused'];
-const KIND = { trash: 'В корзину', delete: 'Удаление', copy: 'Копирование', move: 'Перемещение', download: 'Загрузка' };
-const STATE = { queued: 'в очереди', running: 'выполняется', paused: 'пауза', done: 'готово', failed: 'с ошибками', cancelled: 'отменено', interrupted: 'прервано' };
+// подписи вида и состояния задачи — функциями: так они следуют за сменой языка
+const KIND = (k) => (I18N.en[`task.kind.${k}`] ? tr(`task.kind.${k}`) : k);
+const STATE = (k) => (I18N.en[`task.state.${k}`] ? tr(`task.state.${k}`) : k);
 
 function tasksOpen(on) {
   TK.open = on;
   try { localStorage.setItem('filecat.tasksShown', on ? '1' : '0'); } catch { /* недоступно */ }
   renderTasks();
 }
-const fmtEta = (s) => (s < 60 ? `${Math.ceil(s)} с` : s < 3600 ? `${Math.round(s / 60)} мин` : `${(s / 3600).toFixed(1)} ч`);
+const fmtEta = (s) => (s < 60 ? tr('time.s', { n: Math.ceil(s) }) : s < 3600 ? tr('time.min', { n: Math.round(s / 60) }) : tr('time.h', { n: (s / 3600).toFixed(1) }));
 
 // таблица задач: строка на объект; действие над несколькими объектами — группа со сводной строкой
 TK.fold = new Set();   // свёрнутые группы
 TK.unfold = new Set(); // большие группы, которые развернули вручную
 const devName = (peer) => {
   if (!peer || peer === Pz.info?.id) return '';
-  return Pz.info?.peers?.find((p) => p.id === peer)?.name || 'другой компьютер';
+  return Pz.info?.peers?.find((p) => p.id === peer)?.name || tr('peer.other');
 };
 const withDev = (peer, path) => (devName(peer) ? `${devName(peer)} · ${path}` : path);
 const shortPath = (path) => {
@@ -1696,10 +1702,10 @@ const pctOf = (j) => (j.state === 'done' ? 100 : j.bytes_total ? Math.min(100, (
 function jobCells(j) {
   const it = j.items && j.items[0];
   const many = (j.items?.length || 0) + (j.urls?.length || 0) > 1;
-  const name = j.urls?.length ? (many ? `${j.urls.length} ссылок` : baseName(j.urls[0].split('?')[0]) || j.urls[0])
-    : it ? (many ? `${j.items.length} объектов` : baseName(it.path)) : j.title;
+  const name = j.urls?.length ? (many ? trn('common.links', j.urls.length) : baseName(j.urls[0].split('?')[0]) || j.urls[0])
+    : it ? (many ? trn('common.items', j.items.length) : baseName(it.path)) : j.title;
   const from = j.urls?.length ? urlHost(j.urls[0]) : it ? withDevShort(it.peer, parentDir(it.path)) : '';
-  const to = j.kind === 'trash' ? 'Корзина' : j.kind === 'delete' ? 'удаление навсегда' : j.dest ? withDevShort(j.dest.peer, j.dest.path) : '';
+  const to = j.kind === 'trash' ? tr('task.to.trash') : j.kind === 'delete' ? tr('task.to.delete') : j.dest ? withDevShort(j.dest.peer, j.dest.path) : '';
   const full = (j.urls?.length ? j.urls[0] : it ? withDev(it.peer, it.path) : j.title) + (j.dest ? `\n→ ${withDev(j.dest.peer, j.dest.path)}` : '');
   return { name, from, to, full };
 }
@@ -1711,27 +1717,27 @@ function progressCell(pct, sub, cls = '') {
 function jobRow(j, inGroup) {
   const c = jobCells(j);
   const running = j.state === 'running';
-  const sub = j.bytes_total ? `${fmtSize(j.bytes_done)} из ${fmtSize(j.bytes_total)}` : j.files_total > 1 ? `${fmtNum(j.files_done)} из ${fmtNum(j.files_total)}` : '';
+  const sub = j.bytes_total ? tr('common.ofTotal', { done: fmtSize(j.bytes_done), total: fmtSize(j.bytes_total) }) : j.files_total > 1 ? tr('common.ofTotal', { done: fmtNum(j.files_done), total: fmtNum(j.files_total) }) : '';
   const eta = running && j.speed > 0 && j.bytes_total > j.bytes_done ? fmtEta((j.bytes_total - j.bytes_done) / j.speed) : '';
   const btns = [
-    running && `<button data-jact="pause" data-id="${j.id}" title="Пауза">❚❚</button>`,
-    j.state === 'paused' && `<button data-jact="resume" data-id="${j.id}" title="Продолжить">▶</button>`,
-    ACTIVE.includes(j.state) && `<button data-jact="cancel" data-id="${j.id}" class="x" title="Остановить эту задачу">✕</button>`,
-    ['failed', 'cancelled', 'interrupted'].includes(j.state) && `<button data-jact="retry" data-id="${j.id}" title="Повторить">↻</button>`,
-    j.dest && !j.dest.peer && !j.dest.path.startsWith('s3://') && j.state === 'done' && `<button data-jact="open" data-id="${j.id}" title="Открыть папку назначения">📂</button>`,
+    running && `<button data-jact="pause" data-id="${j.id}" title="${tr('task.pause')}">❚❚</button>`,
+    j.state === 'paused' && `<button data-jact="resume" data-id="${j.id}" title="${tr('task.resume')}">▶</button>`,
+    ACTIVE.includes(j.state) && `<button data-jact="cancel" data-id="${j.id}" class="x" title="${tr('task.cancel')}">✕</button>`,
+    ['failed', 'cancelled', 'interrupted'].includes(j.state) && `<button data-jact="retry" data-id="${j.id}" title="${tr('task.retry')}">↻</button>`,
+    j.dest && !j.dest.peer && !j.dest.path.startsWith('s3://') && j.state === 'done' && `<button data-jact="open" data-id="${j.id}" title="${tr('task.openDest')}">📂</button>`,
   ].filter(Boolean).join('');
   const err = j.error || (j.errors?.length ? j.errors[0] : '');
-  return `<div class="trow ${j.state}${inGroup ? ' sub' : ''}" title="${esc(c.full + (j.current && ACTIVE.includes(j.state) ? `\nсейчас: ${j.current}` : '') + (err ? `\n${err}` : ''))}">
+  return `<div class="trow ${j.state}${inGroup ? ' sub' : ''}" title="${esc(c.full + (j.current && ACTIVE.includes(j.state) ? `\n${tr('task.current', { path: j.current })}` : '') + (err ? `\n${err}` : ''))}">
     <span class="c-fold"></span>
-    <span class="c-what"><small class="kind">${KIND[j.kind] || j.kind}</small>${esc(c.name)}</span>
+    <span class="c-what"><small class="kind">${KIND(j.kind)}</small>${esc(c.name)}</span>
     <span class="c-path">${esc(c.from)}</span>
     <span class="c-path">${esc(c.to)}</span>
     ${progressCell(pctOf(j), sub, j.state)}
-    <span class="c-num">${running && j.speed ? `${fmtSize(j.speed)}/с` : ''}</span>
+    <span class="c-num">${running && j.speed ? tr('common.perSec', { size: fmtSize(j.speed) }) : ''}</span>
     <span class="c-num">${eta}</span>
-    <span class="c-state">${STATE[j.state] || j.state}${err ? ` <span class="t-err">${esc(err)}</span>` : ''}</span>
+    <span class="c-state">${STATE(j.state)}${err ? ` <span class="t-err">${esc(err)}</span>` : ''}</span>
     <span class="c-btns">${btns}</span>
-  </div>${j.errors && j.errors.length > 1 ? `<details class="t-errs"><summary>Ошибки (${j.errors.length})</summary>${j.errors.slice(0, 50).map((e) => `<div>${esc(e)}</div>`).join('')}</details>` : ''}`;
+  </div>${j.errors && j.errors.length > 1 ? `<details class="t-errs"><summary>${tr('task.errors', { n: j.errors.length })}</summary>${j.errors.slice(0, 50).map((e) => `<div>${esc(e)}</div>`).join('')}</details>` : ''}`;
 }
 
 function groupRow(g, list, folded) {
@@ -1746,17 +1752,17 @@ function groupRow(g, list, folded) {
   const eta = act.length && speed > 0 && known ? fmtEta(left / speed) : '';
   const state = act.length ? (list.some((j) => j.state === 'running') ? 'running' : list.some((j) => j.state === 'paused') ? 'paused' : 'queued') : bad ? 'failed' : 'done';
   const j0 = list[0], c = jobCells({ ...j0, items: list.flatMap((j) => j.items || []), urls: list.flatMap((j) => j.urls || []) });
-  const from = new Set(list.map((j) => jobCells(j).from)).size === 1 ? c.from : 'разные папки';
-  const btns = act.length ? `<button data-jact="cancel-group" data-id="${g}" class="x" title="Остановить все задачи группы">✕ все</button>` : '';
+  const from = new Set(list.map((j) => jobCells(j).from)).size === 1 ? c.from : tr('task.variousDirs');
+  const btns = act.length ? `<button data-jact="cancel-group" data-id="${g}" class="x" title="${tr('task.cancelGroup.title')}">✕ ${tr('task.all')}</button>` : '';
   return `<div class="trow group ${state}" data-group="${g}">
     <span class="c-fold">${folded ? '▸' : '▾'}</span>
-    <span class="c-what"><small class="kind">${KIND[j0.kind] || j0.kind}</small>${esc(c.name)}</span>
+    <span class="c-what"><small class="kind">${KIND(j0.kind)}</small>${esc(c.name)}</span>
     <span class="c-path">${esc(from)}</span>
     <span class="c-path">${esc(c.to)}</span>
-    ${progressCell(pct, `${done} из ${n} готово`, state)}
-    <span class="c-num">${speed ? `${fmtSize(speed)}/с` : ''}</span>
+    ${progressCell(pct, tr('task.groupDone', { done, n }), state)}
+    <span class="c-num">${speed ? tr('common.perSec', { size: fmtSize(speed) }) : ''}</span>
     <span class="c-num">${eta}</span>
-    <span class="c-state">${act.length ? `${STATE[state]}` : bad ? `не удалось: ${bad}` : STATE.done}</span>
+    <span class="c-state">${act.length ? STATE(state) : bad ? tr('task.failedN', { n: bad }) : STATE('done')}</span>
     <span class="c-btns">${btns}</span>
   </div>`;
 }
@@ -1766,8 +1772,8 @@ function renderTasks() {
   panel.classList.toggle('collapsed', !TK.open);
   panel.style.height = TK.open ? `${TK.height}px` : '';
   const active = TK.list.filter((j) => ACTIVE.includes(j.state)).length;
-  $('#tasks-count').textContent = TK.list.length ? `· ${active ? `выполняется ${active}` : 'все завершены'}` : '';
-  $('#st-tasks').innerHTML = active ? `<i class="spin"></i>Задачи: ${active} в работе` : 'Задачи';
+  $('#tasks-count').textContent = TK.list.length ? `· ${active ? tr('tasks.running', { n: active }) : tr('tasks.allDone')}` : '';
+  $('#st-tasks').innerHTML = active ? `<i class="spin"></i>${tr('tasks.busy', { n: active })}` : tr('tasks.title');
   $('#st-tasks').classList.toggle('busy', !!active);
   $('#st-tasks').classList.toggle('on', TK.open);
   if (!TK.open) return;
@@ -1787,14 +1793,14 @@ function renderTasks() {
     return groupRow(b.group, list, folded) + (folded ? '' : list.map((j) => jobRow(j, true)).join(''));
   }).join('');
   $('#tasks-list').innerHTML = TK.list.length
-    ? `<div class="thead"><span></span><span>Что</span><span>Откуда</span><span>Куда</span><span>Выполнено</span><span>Скорость</span><span>Осталось</span><span>Состояние</span><span></span></div>${html}`
-    : '<p class="muted t-empty">Здесь будут задачи: удаление, копирование, перемещение и загрузка. Выделите файлы и нажмите Ctrl+C, затем откройте папку и Ctrl+V; Delete — в корзину, Shift+Delete — навсегда.</p>';
+    ? `<div class="thead"><span></span><span>${tr('task.col.what')}</span><span>${tr('task.col.from')}</span><span>${tr('task.col.to')}</span><span>${tr('task.col.done')}</span><span>${tr('task.col.speed')}</span><span>${tr('task.col.eta')}</span><span>${tr('task.col.state')}</span><span></span></div>${html}`
+    : `<p class="muted t-empty">${tr('tasks.empty')}</p>`;
 }
 $('#tasks-clear').addEventListener('click', () => invoke('jobs_clear'));
 $('#tasks-hide').addEventListener('click', () => tasksOpen(false));
 $('#st-tasks').addEventListener('click', () => tasksOpen(!TK.open));
 function jobAdded() {
-  toast(TK.open ? 'Задача добавлена' : 'Задача добавлена — ход выполнения: «Задачи» внизу слева');
+  toast(TK.open ? tr('tasks.added') : tr('tasks.addedHint'));
 }
 $('#tasks-list').addEventListener('click', (e) => {
   const b = e.target.closest('[data-jact]');
@@ -1880,10 +1886,10 @@ $('#src-list').addEventListener('contextmenu', (e) => {
   if (!g) return;
   const p = Pz.info.peers.find((x) => x.id === g.dataset.peer);
   showMenu(e, [
-    ['Доступ к этому компьютеру…', () => openShareModal(p)],
-    ['Переименовать', () => renameInline(g, p.name, async (name) => { await call('p2p_rename', { peer: p.id, name }); await loadSources(); })],
-    ['Отключить устройство…', async () => {
-      if (!(await ask(`Отключить «${p.name}»?\n\nКомпьютеры перестанут видеть друг друга. Чтобы снова подключить, понадобится новый код.`, { ok: 'Отключить', danger: true }))) return;
+    [tr('peer.ctx.access'), () => openShareModal(p)],
+    [tr('ctx.rename'), () => renameInline(g, p.name, async (name) => { await call('p2p_rename', { peer: p.id, name }); await loadSources(); })],
+    [tr('peer.ctx.unpair'), async () => {
+      if (!(await ask(tr('peer.unpair.ask', { name: p.name }), { ok: tr('peer.unpair.ok'), danger: true }))) return;
       await call('p2p_remove', { peer: p.id });
       loadSources();
     }],
@@ -1895,28 +1901,28 @@ const PeerWait = { known: null };
 $('#peer-invite').addEventListener('click', async () => {
   let code;
   const share = readSharePick($('#share-pick-invite'));
-  if (!share.roots.length) { $('#peer-wait').textContent = 'Отметьте хотя бы один диск, папку или подключение'; return; }
+  if (!share.roots.length) { $('#peer-wait').textContent = tr('peer.pickOne'); return; }
   try { code = await invoke('p2p_invite', { share }); } catch (e) { $('#peer-wait').textContent = String(e); return; }
   $('#peer-code-out').value = code;
   $('#peer-copy').classList.remove('hidden');
-  $('#peer-wait').textContent = 'Ждём подключения с другого компьютера…';
+  $('#peer-wait').textContent = tr('peer.waiting');
   // запоминаем, кто уже был, чтобы заметить нового
   PeerWait.known = new Set(Pz.info.peers.map((p) => p.id));
   $('#peer-code-out').select();
 });
 $('#peer-copy').addEventListener('click', () => {
-  navigator.clipboard.writeText($('#peer-code-out').value).then(() => toast('Код скопирован'));
+  navigator.clipboard.writeText($('#peer-code-out').value).then(() => toast(tr('peer.codeCopied')));
 });
 $('#peer-join-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const code = $('#peer-code-in').value.trim();
   if (!code) return;
   $('#peer-join').disabled = true;
-  $('#peer-join-status').textContent = 'Соединяюсь…';
+  $('#peer-join-status').textContent = tr('peer.connecting');
   try {
     const name = await invoke('p2p_join', { code });
     closeModal();
-    toast(`Подключено: ${name}`, 6000);
+    toast(tr('peer.connected', { name }), 6000);
     await loadSources();
   } catch (err) {
     $('#peer-join-status').textContent = String(err);
@@ -1932,7 +1938,7 @@ listen('peers-changed', async () => {
   if (!fresh) return;
   PeerWait.known = null;
   closeModal();
-  toast(`Подключено: ${fresh.name}`, 6000);
+  toast(tr('peer.connected', { name: fresh.name }), 6000);
   loadSources();
 });
 // источник выбирается и с клавиатуры
@@ -1952,25 +1958,25 @@ async function smartPaste() {
   const urls = text && text !== Clip.text ? [...new Set(text.match(/https?:\/\/[^\s"'<>]+/gi) || [])] : [];
   if (urls.length) return pasteLinks(urls);
   if (Clip.items.length) return clipPaste();
-  toast('В буфере обмена нет ни файлов, ни ссылок');
+  toast(tr('paste.empty'));
 }
 async function pasteLinks(urls) {
   const dest = hereLoc();
   const where = (curSource()?.peer ? curSource().peerName + ' · ' : '') + dest.path;
-  toast(`Проверяю ${urls.length === 1 ? 'ссылку' : `ссылки (${urls.length})`}…`, 30000);
+  toast(urls.length === 1 ? tr('paste.checkingOne') : tr('paste.checkingN', { n: urls.length }), 30000);
   let probes;
   try { probes = await invoke('url_probe', { urls }); } catch (e) { toast(String(e), 6000); return; }
   const good = probes.filter((p) => p.ok && !p.html);
   const pages = probes.filter((p) => p.ok && p.html);
   const bad = probes.filter((p) => !p.ok);
-  const line = (p) => `• ${p.name} — ${p.size != null ? fmtSize(p.size) : 'размер неизвестен'}${p.resumable ? '' : ', без докачки'}`;
+  const line = (p) => `• ${p.name} — ${p.size != null ? fmtSize(p.size) : tr('paste.sizeUnknown')}${p.resumable ? '' : `, ${tr('paste.noResume')}`}`;
   let msg = '';
-  if (good.length) msg += `Скачать в ${where}:\n${good.map(line).join('\n')}`;
-  if (pages.length) msg += `${msg ? '\n\n' : ''}Это веб-страницы, а не файлы (скачается сама страница):\n${pages.map((p) => `• ${p.url}`).join('\n')}`;
-  if (bad.length) msg += `${msg ? '\n\n' : ''}Недоступно:\n${bad.map((p) => `• ${p.url} — ${p.error}`).join('\n')}`;
+  if (good.length) msg += `${tr('paste.downloadTo', { where })}\n${good.map(line).join('\n')}`;
+  if (pages.length) msg += `${msg ? '\n\n' : ''}${tr('paste.pages')}\n${pages.map((p) => `• ${p.url}`).join('\n')}`;
+  if (bad.length) msg += `${msg ? '\n\n' : ''}${tr('paste.unavailable')}\n${bad.map((p) => `• ${p.url} — ${p.error}`).join('\n')}`;
   const take = good.length ? good : pages;
-  if (!take.length) { toast(`Скачать нельзя: ${bad.map((p) => p.error).join('; ')}`, 8000); return; }
-  if (!(await ask(msg, { ok: good.length ? 'Скачать' : 'Всё равно скачать' }))) return;
+  if (!take.length) { toast(tr('paste.cannot', { errors: bad.map((p) => p.error).join('; ') }), 8000); return; }
+  if (!(await ask(msg, { ok: good.length ? tr('paste.ok') : tr('paste.okAnyway') }))) return;
   try {
     await invoke('job_add', { kind: 'download', items: [], dest, urls: take.map((p) => p.url) });
     jobAdded();
@@ -1994,19 +2000,19 @@ function accessDir(p, list) {
   return inn && out ? '⇄' : inn ? '←' : out ? '→' : '—';
 }
 function accessHint(p, list) {
-  const lines = [p.online ? `${p.name} в сети` : `${p.name} не в сети`];
-  lines.push(list.length ? `Вы видите на нём: ${list.length} ${list.length === 1 ? 'источник' : 'источника(ов)'}` : `Вы на нём ничего не видите — он вам ничего не открыл`);
+  const lines = [tr(p.online ? 'peer.online' : 'peer.offline', { name: p.name })];
+  lines.push(list.length ? trn('peer.youSee', list.length) : tr('peer.youSeeNothing'));
   lines.push(sharesOut(p)
-    ? `Он видит на этом компьютере: ${p.share.roots.length} — ${p.share.level === 'full' ? 'полный доступ' : 'только просмотр'}`
-    : 'Он на этом компьютере ничего не видит');
-  if (!list.length && !sharesOut(p)) lines.push('Сопряжены, но доступа нет ни в одну сторону');
-  if (p.outdated) lines.push('На нём старая версия FileHunter: копирование, перемещение и удаление туда работать не будут');
-  lines.push('', 'Правый клик — «Доступ к этому компьютеру…», переименовать, отключить');
+    ? tr('peer.itSees', { n: p.share.roots.length, level: tr(p.share.level === 'full' ? 'share.full' : 'share.viewOnly') })
+    : tr('peer.itSeesNothing'));
+  if (!list.length && !sharesOut(p)) lines.push(tr('peer.noAccess'));
+  if (p.outdated) lines.push(tr('peer.outdated.hint'));
+  lines.push('', tr('peer.ctxHint'));
   return lines.join('\n');
 }
 function shareLabel(sh) {
-  if (!sh || !sh.roots || !sh.roots.length || sh.level === 'none' || !sh.level) return 'вы ему ничего не открыли';
-  return `вы открыли: ${sh.roots.length} · ${sh.level === 'full' ? 'полный доступ' : 'просмотр'}`;
+  if (!sh || !sh.roots || !sh.roots.length || sh.level === 'none' || !sh.level) return tr('share.none');
+  return tr('share.label', { n: sh.roots.length, level: tr(sh.level === 'full' ? 'share.full' : 'share.view') });
 }
 // список своих источников с галочками и уровень доступа
 function renderSharePick(box, share, allowNone = true) {
@@ -2015,10 +2021,10 @@ function renderSharePick(box, share, allowNone = true) {
   const level = share.level && share.level !== 'none' ? share.level : 'view';
   box.innerHTML = `
     <div class="sp-list">${mine.map((s) => `<label class="sp-item"><input type="checkbox" value="${esc(s.root)}" ${has(s.root) ? 'checked' : ''}>
-      <span><b>${esc(s.title)}</b> <small class="muted">${esc(s.kind === 's3' ? 'облако S3' : s.root)}</small></span></label>`).join('')}</div>
+      <span><b>${esc(s.title)}</b> <small class="muted">${esc(s.kind === 's3' ? tr('share.s3') : s.root)}</small></span></label>`).join('')}</div>
     <div class="sp-level">
-      <label><input type="radio" name="lv-${box.id}" value="view" ${level === 'view' ? 'checked' : ''}> Только смотреть и скачивать</label>
-      <label><input type="radio" name="lv-${box.id}" value="full" ${level === 'full' ? 'checked' : ''}> Полный доступ — ещё копировать сюда, перемещать и удалять</label>
+      <label><input type="radio" name="lv-${box.id}" value="view" ${level === 'view' ? 'checked' : ''}> ${tr('share.level.view')}</label>
+      <label><input type="radio" name="lv-${box.id}" value="full" ${level === 'full' ? 'checked' : ''}> ${tr('share.level.full')}</label>
     </div>`;
 }
 function readSharePick(box) {
@@ -2031,7 +2037,7 @@ async function openShareModal(p) {
   shareFor = p;
   let share = p.share;
   try { share = await invoke('p2p_share_get', { peer: p.id }); } catch { /* возьмём из списка */ }
-  $('#share-title').textContent = `Что видит «${p.name}» на этом компьютере`;
+  $('#share-title').textContent = tr('share.titleFor', { name: p.name });
   renderSharePick($('#share-pick-edit'), share || { level: 'none', roots: [] });
   $('#share-modal').classList.remove('hidden');
 }
@@ -2040,7 +2046,7 @@ $('#share-save').addEventListener('click', async () => {
   const share = readSharePick($('#share-pick-edit'));
   try { await invoke('p2p_share_set', { peer: shareFor.id, share }); } catch (e) { toast(String(e), 6000); return; }
   $('#share-modal').classList.add('hidden');
-  toast(share.roots.length ? `«${shareFor.name}» теперь видит: ${share.roots.length}` : `«${shareFor.name}» больше ничего не видит на этом компьютере`, 5000);
+  toast(share.roots.length ? tr('share.saved', { name: shareFor.name, n: share.roots.length }) : tr('share.savedNone', { name: shareFor.name }), 5000);
   loadSources();
 });
 

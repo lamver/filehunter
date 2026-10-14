@@ -8,6 +8,8 @@
 //! Ключи S3 никуда не передаются: облака другого компьютера смотрятся через него.
 
 use crate::{AppState, Shared};
+use filecat_core::l;
+use filecat_core::lang::tr;
 use iroh::endpoint::{presets, Connection, RecvStream, SendStream};
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, EndpointId, SecretKey};
@@ -116,7 +118,7 @@ fn computer_name() -> String {
         .or_else(|_| std::env::var("COMPUTERNAME"))
         .or_else(|_| host_name().ok_or(std::env::VarError::NotPresent))
         .or_else(|_| std::env::var("HOSTNAME"))
-        .unwrap_or_else(|_| "Компьютер".into())
+        .unwrap_or_else(|_| tr("Computer", "Компьютер").into())
 }
 
 /// Имя компьютера на macOS — как в «Общий доступ» системных настроек.
@@ -218,7 +220,7 @@ impl P2p {
     }
 
     pub fn peer_name(&self, id: &str) -> String {
-        self.peers.lock().unwrap().iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_else(|| "другой компьютер".into())
+        self.peers.lock().unwrap().iter().find(|p| p.id == id).map(|p| p.name.clone()).unwrap_or_else(|| tr("another computer", "другой компьютер").into())
     }
 
     fn is_peer(&self, id: &str) -> bool {
@@ -300,16 +302,16 @@ impl P2p {
     /// Подключение к другому компьютеру по его коду-приглашению.
     pub async fn join(&self, code: &str) -> Result<Peer, String> {
         let parts: Vec<&str> = code.trim().splitn(3, '-').collect();
-        let [tag, id, secret] = parts.as_slice() else { return Err("Неверный код приглашения".into()) };
+        let [tag, id, secret] = parts.as_slice() else { return Err(tr("Invalid invitation code", "Неверный код приглашения").into()) };
         if *tag != "FC1" {
-            return Err("Неверный код приглашения".into());
+            return Err(tr("Invalid invitation code", "Неверный код приглашения").into());
         }
         if *id == self.id() {
-            return Err("Это код этого же компьютера".into());
+            return Err(tr("This is the code of this same computer", "Это код этого же компьютера").into());
         }
-        let eid = EndpointId::from_str(id).map_err(|_| "Неверный код приглашения".to_string())?;
+        let eid = EndpointId::from_str(id).map_err(|_| tr("Invalid invitation code", "Неверный код приглашения").to_string())?;
         let (data, _) = self.call_raw(eid, "pair", json!({ "secret": secret, "name": self.name })).await?;
-        let name = data["name"].as_str().unwrap_or("Компьютер").to_string();
+        let name = data["name"].as_str().unwrap_or(tr("Computer", "Компьютер")).to_string();
         // вводящий код ничего своего не открывает (если пара уже была — доступ не меняется)
         self.add_peer(id.to_string(), name.clone(), None);
         Ok(Peer { id: id.to_string(), name, added: filecat_core::util::unix_now(), share: self.share_of(id) })
@@ -324,8 +326,14 @@ impl P2p {
         }
         let c = tokio::time::timeout(Duration::from_secs(20), self.endpoint.connect(EndpointAddr::from(eid), ALPN))
             .await
-            .map_err(|_| "Компьютер не отвечает — он выключен или программа на нём не запущена".to_string())?
-            .map_err(|e| format!("Не удалось соединиться: {e}"))?;
+            .map_err(|_| {
+                let why = tr(
+                    "The computer is not responding — it is turned off or FileHunter is not running on it",
+                    "Компьютер не отвечает — он выключен или программа на нём не запущена",
+                );
+                format!("{OFFLINE} {why}")
+            })?
+            .map_err(|e| format!("{OFFLINE} {}", l!("Could not connect: {e}", "Не удалось соединиться: {e}")))?;
         conns.insert(eid, c.clone());
         Ok(c)
     }
@@ -361,7 +369,9 @@ impl P2p {
             }
             Ok((resp.data, bin))
         };
-        tokio::time::timeout(CALL_TIMEOUT, fut).await.map_err(|_| "Компьютер слишком долго не отвечает".to_string())?
+        tokio::time::timeout(CALL_TIMEOUT, fut)
+            .await
+            .map_err(|_| format!("{OFFLINE} {}", tr("The computer is taking too long to respond", "Компьютер слишком долго не отвечает")))?
     }
 
     /// Запрос без локальной проверки сопряжения — только для самопроверки: другой компьютер
@@ -378,17 +388,27 @@ impl P2p {
     /// Запрос с данными (кусок файла для записи на том компьютере).
     pub async fn call_with(&self, peer: &str, method: &str, args: Value, data: Vec<u8>) -> Result<(Value, Vec<u8>), String> {
         if !self.is_peer(peer) {
-            return Err("Устройство не сопряжено".into());
+            return Err(not_paired());
         }
         let eid = EndpointId::from_str(peer).map_err(|e| e.to_string())?;
+        // известные ошибки того компьютера — на языке этого (метка остаётся для кода)
         let r = self.call_raw_bin(eid, method, args, data).await.map_err(|e| {
-            if e.starts_with("неизвестный запрос") {
-                format!("На компьютере «{}» старая версия FileHunter — обновите её там, чтобы это работало", self.peer_name(peer))
+            if is_unknown_request(&e) {
+                let name = self.peer_name(peer);
+                let why = l!(
+                    "«{name}» has an old version of FileHunter — update it there to make this work",
+                    "На компьютере «{name}» старая версия FileHunter — обновите её там, чтобы это работало"
+                );
+                format!("{UNKNOWN_REQUEST} {why}")
+            } else if is_no_access(&e) {
+                format!("{NO_ACCESS} {}", tr("Access denied: this computer did not share this with you", OLD_NO_ACCESS))
+            } else if is_no_write(&e) {
+                format!("{NO_WRITE} {}", tr("Access denied: this computer shared this with you for viewing only", OLD_NO_WRITE))
             } else {
                 e
             }
         });
-        let ok = r.is_ok() || r.as_ref().is_err_and(|e| !e.contains("не отвечает") && !e.contains("соединиться"));
+        let ok = r.is_ok() || r.as_ref().is_err_and(|e| !e.contains(OFFLINE));
         self.online.lock().unwrap().insert(peer.to_string(), ok);
         r
     }
@@ -428,7 +448,7 @@ async fn read_msg<T: for<'de> Deserialize<'de>>(recv: &mut RecvStream) -> Result
     recv.read_exact(&mut len).await.map_err(|e| e.to_string())?;
     let len = u32::from_be_bytes(len);
     if len > MAX_MSG {
-        return Err("слишком большое сообщение".into());
+        return Err(tr("Message too large", "слишком большое сообщение").into());
     }
     let mut b = vec![0u8; len as usize];
     recv.read_exact(&mut b).await.map_err(|e| e.to_string())?;
@@ -469,7 +489,7 @@ impl ProtocolHandler for Handler {
                 let res = if req.method == "pair" {
                     pair(&p2p, &remote, &req.args)
                 } else if !paired {
-                    Err("Устройство не сопряжено".to_string())
+                    Err(not_paired())
                 } else {
                     p2p.online.lock().unwrap().insert(remote.clone(), true);
                     serve(&app, &p2p.share_of(&remote), &req.method, req.args, data).await
@@ -494,25 +514,71 @@ impl ProtocolHandler for Handler {
 fn pair(p2p: &P2p, remote: &str, args: &Value) -> Result<(Value, Vec<u8>), String> {
     let secret = args["secret"].as_str().unwrap_or_default();
     let Some(share) = p2p.take_invite(secret) else {
-        return Err("Код приглашения неверный или устарел — создайте новый".into());
+        return Err(tr("The invitation code is invalid or expired — create a new one", "Код приглашения неверный или устарел — создайте новый").into());
     };
-    let name = args["name"].as_str().unwrap_or("Компьютер").to_string();
+    let name = args["name"].as_str().unwrap_or(tr("Computer", "Компьютер")).to_string();
     // открываем ему ровно то, что выбрали при создании кода
     p2p.add_peer(remote.to_string(), name, Some(share));
     Ok((json!({ "name": p2p.name }), vec![]))
 }
 
 fn arg<T: for<'de> Deserialize<'de>>(a: &Value, k: &str) -> Result<T, String> {
-    serde_json::from_value(a.get(k).cloned().unwrap_or(Value::Null)).map_err(|e| format!("аргумент {k}: {e}"))
+    serde_json::from_value(a.get(k).cloned().unwrap_or(Value::Null)).map_err(|e| l!("Argument {k}: {e}", "аргумент {k}: {e}"))
 }
 
 fn val<T: Serialize>(v: T) -> Result<(Value, Vec<u8>), String> {
     serde_json::to_value(v).map(|v| (v, vec![])).map_err(|e| e.to_string())
 }
 
+fn not_paired() -> String {
+    tr("The device is not paired", "Устройство не сопряжено").into()
+}
+
+// Метки ошибок: одинаковые на любом языке, по ним ошибку узнаёт код — здесь и на другом
+// компьютере. За меткой — текст для человека; показывая ошибку, метку убирают (`shown`).
 /// Запросы, которые другой компьютер может выполнить здесь: те же команды, что и в окне.
-pub const NO_ACCESS: &str = "Нет доступа: этот компьютер вам это не открывал";
-const NO_WRITE: &str = "Нет доступа: этот компьютер открыл вам только просмотр";
+pub const NO_ACCESS: &str = "[no-access]";
+pub const NO_WRITE: &str = "[no-write]";
+pub const UNKNOWN_REQUEST: &str = "[unknown-request]";
+/// Компьютер не отвечает или с ним не удалось соединиться. Метка только для этого
+/// компьютера — по сети не уходит.
+const OFFLINE: &str = "[offline]";
+// Прежние версии присылают те же ошибки без меток, по-русски. Этот же текст мы ставим
+// после метки: прежние версии узнают ошибку по нему, новые — по метке (и пишут её
+// на своём языке, см. `call_with`).
+const OLD_NO_ACCESS: &str = "Нет доступа: этот компьютер вам это не открывал";
+const OLD_NO_WRITE: &str = "Нет доступа: этот компьютер открыл вам только просмотр";
+const OLD_UNKNOWN_REQUEST: &str = "неизвестный запрос";
+
+pub fn is_no_access(e: &str) -> bool {
+    e.contains(NO_ACCESS) || e.contains(OLD_NO_ACCESS)
+}
+
+fn is_no_write(e: &str) -> bool {
+    e.contains(NO_WRITE) || e.contains(OLD_NO_WRITE)
+}
+
+pub fn is_unknown_request(e: &str) -> bool {
+    e.contains(UNKNOWN_REQUEST) || e.starts_with(OLD_UNKNOWN_REQUEST)
+}
+
+/// Ошибка для человека: без меток.
+pub fn shown(e: &str) -> String {
+    [NO_ACCESS, NO_WRITE, UNKNOWN_REQUEST, OFFLINE].iter().fold(e.to_string(), |s, m| s.replace(&format!("{m} "), ""))
+}
+
+/// Ошибки, которые уходят другому компьютеру: метка и прежний текст.
+fn no_access() -> String {
+    format!("{NO_ACCESS} {OLD_NO_ACCESS}")
+}
+
+fn no_write() -> String {
+    format!("{NO_WRITE} {OLD_NO_WRITE}")
+}
+
+fn unknown_request(method: &str) -> String {
+    format!("{UNKNOWN_REQUEST} {OLD_UNKNOWN_REQUEST}: {method}")
+}
 
 /// Запросы, которые другой компьютер может выполнить здесь — только в пределах того,
 /// что ему открыли (`share`). Проверка здесь, на стороне открывшего.
@@ -521,15 +587,15 @@ async fn serve(app: &AppHandle, share: &Share, method: &str, a: Value, data: Vec
     // какой корень у источника с номером seg
     let seg_root = |a: &Value| -> Result<String, String> {
         let seg: u16 = arg(a, "seg")?;
-        st.index.read().unwrap().segments.get(seg as usize).map(|s| s.info.root.clone()).ok_or_else(|| "источник не найден".to_string())
+        st.index.read().unwrap().segments.get(seg as usize).map(|s| s.info.root.clone()).ok_or_else(|| tr("Source not found", "источник не найден").to_string())
     };
     let need_path = |key: &str, write: bool| -> Result<(), String> {
         let p: String = arg(&a, key)?;
         if !share.allows(&p) {
-            return Err(NO_ACCESS.into());
+            return Err(no_access());
         }
         if write && !share.can_write() {
-            return Err(NO_WRITE.into());
+            return Err(no_write());
         }
         Ok(())
     };
@@ -541,7 +607,7 @@ async fn serve(app: &AppHandle, share: &Share, method: &str, a: Value, data: Vec
         }
         "browse" | "search_folder" | "s3_refresh" => {
             if !share.allows(&seg_root(&a)?) {
-                return Err(NO_ACCESS.into());
+                return Err(no_access());
             }
         }
         "browse_live" | "preview" => need_path("path", false)?,
@@ -554,17 +620,17 @@ async fn serve(app: &AppHandle, share: &Share, method: &str, a: Value, data: Vec
         }
         "replica_list" => {
             if !share.can_view() {
-                return Err(NO_ACCESS.into());
+                return Err(no_access());
             }
         }
         "replica_get" => need_path("root", false)?,
         "trash" => {
             let files: Vec<Value> = arg(&a, "files")?;
             if !share.can_write() || !files.iter().all(|f| f["path"].as_str().is_some_and(|p| share.allows(p))) {
-                return Err(NO_WRITE.into());
+                return Err(no_write());
             }
         }
-        _ => return Err(format!("неизвестный запрос: {method}")),
+        _ => return Err(unknown_request(method)),
     }
     // операции с файлами — в отдельном потоке: диск и S3 могут отвечать долго
     let fs = |f: Box<dyn FnOnce(&AppState) -> Result<(Value, Vec<u8>), String> + Send>| {
@@ -601,7 +667,7 @@ async fn serve(app: &AppHandle, share: &Share, method: &str, a: Value, data: Vec
         "replica_get" => {
             let (root, offset): (String, u64) = (arg(&a, "root")?, arg(&a, "offset")?);
             if !share.roots.iter().any(|r| r.eq_ignore_ascii_case(&root)) {
-                return Err(NO_ACCESS.into());
+                return Err(no_access());
             }
             let version = st.generation.load(std::sync::atomic::Ordering::Relaxed);
             fs(Box::new(move |st| {
@@ -641,7 +707,7 @@ async fn serve(app: &AppHandle, share: &Share, method: &str, a: Value, data: Vec
         "trash" => val(crate::trash_files(st, arg(&a, "files")?)),
         "source_rename" => val(crate::source_rename(app.clone(), st, arg(&a, "root")?, arg(&a, "name")?)?),
         "source_remove" => val(crate::source_remove(st, arg(&a, "root")?)?),
-        _ => Err(format!("неизвестный запрос: {method}")),
+        _ => Err(unknown_request(method)),
     }
 }
 

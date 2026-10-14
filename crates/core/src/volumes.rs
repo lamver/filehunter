@@ -25,7 +25,7 @@ impl Volume {
             return if !self.label.is_empty() {
                 self.label.clone()
             } else if self.root == "/" {
-                "Системный диск".into()
+                crate::lang::tr("System disk", "Системный диск").into()
             } else {
                 self.root.trim_end_matches('/').rsplit('/').next().unwrap_or(&self.root).to_string()
             };
@@ -33,10 +33,10 @@ impl Volume {
         let letter = self.root.trim_end_matches(['\\', '/']);
         let label = if self.label.is_empty() {
             match self.kind.as_str() {
-                "removable" => "Съёмный диск",
-                "network" => "Сетевой диск",
-                "cdrom" => "Дисковод",
-                _ => "Локальный диск",
+                "removable" => crate::lang::tr("Removable disk", "Съёмный диск"),
+                "network" => crate::lang::tr("Network drive", "Сетевой диск"),
+                "cdrom" => crate::lang::tr("CD drive", "Дисковод"),
+                _ => crate::lang::tr("Local disk", "Локальный диск"),
             }
         } else {
             &self.label

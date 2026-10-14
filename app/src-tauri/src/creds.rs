@@ -33,7 +33,7 @@ mod imp {
             UserName: user_w.as_mut_ptr(),
         };
         if unsafe { CredWriteW(&cred, 0) } == 0 {
-            return Err(format!("не удалось сохранить ключ: {}", std::io::Error::last_os_error()));
+            return Err(filecat_core::l!("Could not save the key: {}", "не удалось сохранить ключ: {}", std::io::Error::last_os_error()));
         }
         Ok(())
     }
@@ -66,7 +66,7 @@ mod imp {
         keyring::Entry::new(target, "filecat").map_err(|e| e.to_string())
     }
     pub fn set(target: &str, secret: &str) -> Result<(), String> {
-        entry(target)?.set_password(secret).map_err(|e| format!("не удалось сохранить ключ: {e}"))
+        entry(target)?.set_password(secret).map_err(|e| filecat_core::l!("Could not save the key: {e}", "не удалось сохранить ключ: {e}"))
     }
     pub fn get(target: &str) -> Option<String> {
         entry(target).ok()?.get_password().ok()

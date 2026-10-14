@@ -8,6 +8,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_updater::UpdaterExt;
 
 use crate::Shared;
+use filecat_core::l;
 
 #[derive(Serialize)]
 pub struct UpdateDto {
@@ -19,7 +20,7 @@ pub struct UpdateDto {
 }
 
 fn err(e: impl std::fmt::Display) -> String {
-    format!("Не удалось проверить обновления: {e}")
+    l!("Could not check for updates: {e}", "Не удалось проверить обновления: {e}")
 }
 
 #[tauri::command]
@@ -48,7 +49,7 @@ struct Progress {
 #[tauri::command]
 pub async fn update_install(app: AppHandle, st: State<'_, Shared>) -> Result<(), String> {
     let Some(update) = app.updater().map_err(err)?.check().await.map_err(err)? else {
-        return Err("Обновлений нет — у вас последняя версия".into());
+        return Err(filecat_core::lang::tr("No updates — you have the latest version", "Обновлений нет — у вас последняя версия").into());
     };
     let mut done = 0u64;
     let ev = app.clone();
@@ -61,12 +62,12 @@ pub async fn update_install(app: AppHandle, st: State<'_, Shared>) -> Result<(),
             || {},
         )
         .await
-        .map_err(|e| format!("Не удалось скачать обновление: {e}"))?;
+        .map_err(|e| l!("Could not download the update: {e}", "Не удалось скачать обновление: {e}"))?;
     // установщик Windows закрывает программу сразу, без обычного выхода — сохраняем индекс заранее
     if st.dirty.load(Ordering::Relaxed) {
         crate::watch::save_index(&st);
     }
-    update.install(bytes).map_err(|e| format!("Не удалось установить обновление: {e}"))?;
+    update.install(bytes).map_err(|e| l!("Could not install the update: {e}", "Не удалось установить обновление: {e}"))?;
     app.restart();
 }
 
