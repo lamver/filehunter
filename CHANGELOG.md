@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.4
+
+- Search everywhere: a switch under the results ("search everywhere" / "only in this
+  folder") searches all disks, folders and S3 of this computer and the connected
+  computers in one query. A "Where" column shows the source of each result; results
+  open, copy and delete wherever they are. The choice is remembered.
+- Dialogs, including the update prompt, are now visible on every tab.
+
 ## 0.1.3
 
 - Duplicate search right in the search field:
