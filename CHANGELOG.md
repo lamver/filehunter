@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.3
+
+- Duplicate search right in the search field:
+  - `dup:size` answers instantly from the index, on all sources: copies of whole
+    folders (same total size and file count) and files of the same size. Marked
+    "same size" because contents are not compared.
+  - `dup:` checks contents in the open folder and below, `dup:all` on all disks and
+    S3. The biggest possible savings are checked first; groups appear as "matches by
+    samples" and then become "exact copy" once compared in full.
+  - Files from 1 MB by default; add `size:>0` for smaller ones. Filters like
+    `ext:mp4` work too.
+  - S3 objects are compared by their ETag without downloading; a local file of the
+    same size is checked by MD5. Buckets are re-listed once to collect ETags.
+  - Found files and folders are regular rows: select, delete, copy as usual; the
+    delete prompt shows full paths.
+- The window no longer freezes while sources, folders or search results load:
+  heavy work runs in the background.
+
 ## 0.1.2
 
 - Double-click the path above the file list to get it as plain text, already selected:
