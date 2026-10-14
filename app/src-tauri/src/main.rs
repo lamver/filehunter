@@ -178,8 +178,14 @@ fn source_remove(st: State<Shared>, root: String) -> CmdResult<()> {
     store_prefs(&st, &p)
 }
 
-#[tauri::command]
-fn sources(st: State<Shared>) -> Vec<SourceDto> {
+// Тяжёлые команды — `command(async)`: выполняются в пуле потоков, а не в потоке окна,
+// иначе окно замирает, пока они работают (опрос дисков, проход по индексу).
+#[tauri::command(async)]
+fn sources(st: State<Shared>) -> CmdResult<Vec<SourceDto>> {
+    Ok(sources_now(st))
+}
+
+fn sources_now(st: State<Shared>) -> Vec<SourceDto> {
     // очередь считаем до блокировок ниже: она берёт те же блокировки
     let queue = needs_index(&st);
     let idx = st.index.read().unwrap();
@@ -286,7 +292,7 @@ fn drive_log(st: State<Shared>) -> Vec<drives::DriveEvent> {
 }
 
 /// Находит источник и папку по введённому в адресную строку пути.
-#[tauri::command]
+#[tauri::command(async)]
 fn locate(st: State<Shared>, path: String) -> CmdResult<(u16, Option<u32>)> {
     let p = path.trim().trim_end_matches(['\\', '/']).to_lowercase();
     let idx = st.index.read().unwrap();
@@ -409,7 +415,7 @@ fn folder_totals(st: &AppState, idx: &Index, seg: u16) -> Arc<HashMap<u32, (u64,
     t
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn browse(st: State<Shared>, seg: u16, dir: Option<u32>, sort: Option<String>, desc: bool) -> CmdResult<BrowseDto> {
     // дерево детей строится один раз и дальше обновляется слежением; для этого нужна запись.
     // Если индекс занят (идёт долгий поиск дубликатов), строим временное дерево по чтению.
@@ -518,7 +524,7 @@ struct FoundDto {
 }
 
 /// Поиск по имени в открытой папке и всех вложенных (по индексу).
-#[tauri::command]
+#[tauri::command(async)]
 fn search_folder(st: State<Shared>, seg: u16, dir: Option<u32>, query: String) -> CmdResult<FoundDto> {
     let q = Query::parse(&query).map_err(err)?;
     let t = Instant::now();
@@ -1461,7 +1467,7 @@ pub(crate) fn auto_index(app: AppHandle, st: Arc<AppState>) {
     });
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn forget(st: State<Shared>, root: String) -> CmdResult<()> {
     begin(&st, "save")?;
     let r = (|| {
@@ -1487,7 +1493,7 @@ struct SearchDto {
     ms: f64,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn find(st: State<Shared>, query: String, sort: Option<SortBy>, desc: bool) -> CmdResult<SearchDto> {
     let q = Query::parse(&query).map_err(err)?;
     let t = Instant::now();
@@ -1575,12 +1581,12 @@ struct SizeReportDto {
 
 /// dup:size — группы одинакового размера на всех источниках, прямо из индекса:
 /// копии папок (верхний уровень) и файлы от `min_size`. Без чтения диска.
-#[tauri::command]
+#[tauri::command(async)]
 fn dup_sizes(st: State<Shared>, query: String, min_size: u64) -> CmdResult<SizeReportDto> {
     const SHOW: usize = 3000;
     let t = Instant::now();
     let q = if query.trim().is_empty() { None } else { Some(Query::parse(&query).map_err(err)?) };
-    let names: HashMap<String, String> = crate::sources(st.clone()).into_iter().map(|s| (s.root.to_lowercase(), s.title)).collect();
+    let names: HashMap<String, String> = crate::sources_now(st.clone()).into_iter().map(|s| (s.root.to_lowercase(), s.title)).collect();
     let idx = st.index.read().unwrap();
     let rep = filecat_core::dupfind::by_size(&idx, min_size, &|r| {
         q.as_ref().is_none_or(|q| {
@@ -1673,7 +1679,7 @@ fn dup_search(
     std::thread::spawn(move || {
         // названия источников — до блокировки индекса: sources() берёт её сама
         let names: HashMap<String, String> =
-            crate::sources(app.state::<Shared>()).into_iter().map(|s| (s.root.to_lowercase(), s.title)).collect();
+            crate::sources_now(app.state::<Shared>()).into_iter().map(|s| (s.root.to_lowercase(), s.title)).collect();
         // индекс нужен только на выбор кандидатов — дальше поиск работает со своим списком
         let (pl, titles) = {
             let idx = st.index.read().unwrap();

@@ -1,6 +1,14 @@
-const { invoke } = window.__TAURI__.core;
+const DEV = /fhdev/.test(location.href);
+const invoke = !DEV ? window.__TAURI__.core.invoke : async (cmd, args) => {
+  // тестовая версия: вызовы дольше 300 мс и ошибки — в журнал dev.log
+  const t = performance.now();
+  try { return await window.__TAURI__.core.invoke(cmd, args); } catch (e) { if (cmd !== 'dev_log') devLog(`вызов ${cmd} — ошибка: ${e}`); throw e; } finally {
+    const ms = performance.now() - t;
+    if (ms > 300 && cmd !== 'dev_log') devLog(`вызов ${cmd}: ${Math.round(ms)} мс`);
+  }
+};
 // тестовая версия (dev.bat): что интерфейс поднялся и его ошибки — в журнал dev.log
-const devLog = (m) => { if (/fhdev/.test(location.href)) invoke('dev_log', { msg: String(m) }).catch(() => {}); };
+function devLog(m) { if (DEV) window.__TAURI__.core.invoke('dev_log', { msg: String(m) }).catch(() => {}); }
 window.addEventListener('error', (e) => devLog(`ошибка: ${e.message} @ ${(e.filename || '').split('/').pop()}:${e.lineno}`));
 window.addEventListener('unhandledrejection', (e) => devLog(`ошибка (promise): ${e.reason}`));
 const { listen } = window.__TAURI__.event;

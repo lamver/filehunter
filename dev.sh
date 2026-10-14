@@ -21,5 +21,5 @@ if [ ! -f "$FILECAT_DATA_DIR/index.bin" ] && [ -f "$SRC/index.bin" ]; then
 fi
 
 echo "Собираю..."
-nice -n 10 cargo build -p filehunter
-./target/debug/filehunter &
+nice -n 10 cargo build -p filehunter --profile fast
+./target/fast/filehunter &

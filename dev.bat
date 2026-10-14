@@ -20,10 +20,10 @@ if not exist "%FILECAT_DATA_DIR%\index.bin" if exist "%SRC%\index.bin" (
 
 rem сборка на пониженном приоритете, чтобы компьютер не тормозил; первая - долгая
 echo Собираю...
-start "" /b /belownormal /wait cargo build -p filehunter
+start "" /b /belownormal /wait cargo build -p filehunter --profile fast
 if errorlevel 1 (
   echo Сборка не удалась.
   pause
   exit /b 1
 )
-start "" "target\debug\filehunter.exe"
+start "" "target\fast\filehunter.exe"

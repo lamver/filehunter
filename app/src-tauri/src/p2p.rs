@@ -519,7 +519,7 @@ async fn serve(app: &AppHandle, share: &Share, method: &str, a: Value, data: Vec
     match method {
         "ping" => {}
         "sources" => {
-            let list: Vec<_> = crate::sources(st.clone()).into_iter().filter(|s| share.allows(&s.root)).collect();
+            let list: Vec<_> = crate::sources_now(st.clone()).into_iter().filter(|s| share.allows(&s.root)).collect();
             return val(list);
         }
         "browse" | "search_folder" | "s3_refresh" => {
@@ -588,7 +588,7 @@ async fn serve(app: &AppHandle, share: &Share, method: &str, a: Value, data: Vec
             val(())
         }
         "ping" => val(json!({ "proto": PROTO, "version": env!("CARGO_PKG_VERSION") })),
-        "sources" => val(crate::sources(st)),
+        "sources" => val(crate::sources_now(st)),
         "browse" => val(crate::browse(st, arg(&a, "seg")?, arg(&a, "dir")?, arg(&a, "sort")?, arg(&a, "desc")?)?),
         "browse_live" => val(crate::browse_live(st, arg(&a, "root")?, arg(&a, "path")?).await?),
         "search_folder" => val(crate::search_folder(st, arg(&a, "seg")?, arg(&a, "dir")?, arg(&a, "query")?)?),
