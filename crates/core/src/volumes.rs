@@ -92,8 +92,10 @@ mod unix {
         for d in dirs {
             let Ok(rd) = std::fs::read_dir(&d) else { continue };
             for e in rd.flatten() {
-                // «Macintosh HD» в /Volumes — ссылка на корень, его уже добавили
-                if e.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()) {
+                // «Macintosh HD» в /Volumes — ссылка на корень, его уже добавили;
+                // открытые установщики (.dmg) — не диски: в них ярлык «Applications» для перетаскивания
+                let installer = e.path().join("Applications").symlink_metadata().is_ok_and(|m| m.file_type().is_symlink());
+                if e.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()) && !installer {
                     let p = e.path().to_string_lossy().into_owned();
                     if !out.contains(&p) {
                         out.push(p);
