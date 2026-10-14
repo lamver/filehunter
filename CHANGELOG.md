@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.8
+
+- The interface is available in English and Russian. English is the base language; on
+  first start the language follows the system.
+- A program menu at the top left (≡) holds Settings and About.
+- Settings: language and theme (as in the system, light, dark). Changes apply at once
+  and are remembered.
+- The tray menu, disk names, task titles and error messages follow the chosen language.
+  Errors from another computer are shown in your language, whatever language it uses.
+
 ## 0.1.7
 
 - macOS build fixed. Search by meaning works on Windows and on Macs with Apple Silicon;
