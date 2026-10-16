@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.9
+
+- Access for AI agents (MCP), off by default: Settings → AI agents. Claude Desktop,
+  Claude Code and other MCP clients can list sources, search by name and by meaning,
+  list folders with sizes, find duplicate candidates, read file info, follow tasks and
+  copy files, also between computers. Every copy is shown in FileHunter for you to
+  allow first. Settings shows ready-made setup for Claude Code and Claude Desktop.
+- macOS: opened installer images (.dmg) are no longer listed as disks.
+
 ## 0.1.8
 
 - The interface is available in English and Russian. English is the base language; on
