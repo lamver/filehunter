@@ -102,6 +102,16 @@
           <option value="dark" data-i18n="settings.theme.dark">Dark</option>
         </select>
       </label>
+      <div class="set-section">
+        <label class="set-check"><input type="checkbox" id="set-mcp"> <span data-i18n="mcp.toggle">Access for AI agents (MCP)</span></label>
+        <p class="muted" data-i18n="mcp.hint">AI agents such as Claude can search your files, list folders, find duplicates and copy files. Copying always asks you here first. Names and paths the agent receives go to wherever its model runs.</p>
+        <div id="set-mcp-setup" class="hidden">
+          <div class="set-sub" data-i18n="mcp.claudeCode">Claude Code — run once in a terminal:</div>
+          <div class="set-code"><code id="mcp-cmd"></code><button type="button" data-copy="mcp-cmd" data-i18n="mcp.copy">Copy</button></div>
+          <div class="set-sub" data-i18n="mcp.claudeDesktop">Claude Desktop — add to claude_desktop_config.json (Settings → Developer → Edit config):</div>
+          <div class="set-code"><code id="mcp-json"></code><button type="button" data-copy="mcp-json" data-i18n="mcp.copy">Copy</button></div>
+        </div>
+      </div>
       <div class="m-actions"><button type="button" id="set-close" class="primary" data-i18n="settings.close">Close</button></div>
     </div>
   </div>

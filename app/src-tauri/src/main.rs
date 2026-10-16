@@ -5,6 +5,7 @@ mod devui;
 mod drives;
 mod fsops;
 mod jobs;
+mod mcp;
 mod p2p;
 mod replica;
 mod semantic;
@@ -1085,6 +1086,29 @@ fn tray_menu<M: Manager<tauri::Wry>>(m: &M) -> tauri::Result<tauri::menu::Menu<t
 
 fn tray_tooltip() -> &'static str {
     filecat_core::lang::tr("FileHunter — running in the background", "FileHunter — работает в фоне")
+}
+
+#[derive(Serialize)]
+struct McpInfo {
+    enabled: bool,
+    /// Путь к программе — для команды подключения агента.
+    exe: String,
+}
+
+#[tauri::command]
+fn mcp_info() -> McpInfo {
+    McpInfo { enabled: mcp::enabled(), exe: std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default() }
+}
+
+#[tauri::command]
+fn mcp_set(st: State<Shared>, enabled: bool) {
+    mcp::set_enabled(&st, enabled);
+}
+
+/// Ответ пользователя на «ИИ-агент хочет скопировать…».
+#[tauri::command]
+fn mcp_answer(id: u64, ok: bool) {
+    mcp::answer(id, ok);
 }
 
 /// Язык интерфейса выбран в окне: сообщения ядра и меню в трее — на нём же; запоминаем,
@@ -2345,6 +2369,11 @@ fn data_dir() -> PathBuf {
 }
 
 fn main() {
+    // `FileHunter --mcp` — посредник для ИИ-агента (stdio), окно не открывается
+    if std::env::args().any(|a| a == "--mcp") {
+        mcp::bridge(data_dir());
+        return;
+    }
     let data_dir = data_dir();
     // язык, выбранный в прошлый раз (до того, как окно скажет его само)
     if let Ok(l) = std::fs::read_to_string(data_dir.join("lang.txt")) {
@@ -2452,6 +2481,9 @@ fn main() {
             semantic_search,
             semantic_status,
             set_lang,
+            mcp_info,
+            mcp_set,
+            mcp_answer,
             dup_search,
             dup_sizes,
             dev_log,
@@ -2520,6 +2552,8 @@ fn main() {
             let _ = st.jobs.set(jobs::Jobs::start(app.handle().clone(), &st));
             // поиск по смыслу: отпечатки имён считаются в фоне
             st.semantic.clone().run(app.handle().clone(), st.clone());
+            // доступ для ИИ-агентов (MCP): слушает 127.0.0.1, отвечает, только если включён
+            mcp::start(app.handle().clone(), &st);
             *st.drives.lock().unwrap() = drives::load(&st);
             drives::start(app.handle().clone(), st.clone());
             // для дисков, просканированных раньше, запоминаем текущий том как проиндексированный

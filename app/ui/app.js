@@ -110,7 +110,31 @@ function settingsOpen() {
   $('#set-theme').value = THEME;
   $('#settings-modal').classList.remove('hidden');
   $('#set-lang').focus();
+  mcpRender();
 }
+// доступ для ИИ-агентов (MCP): переключатель и готовые настройки подключения
+async function mcpRender() {
+  let info = { enabled: false, exe: '' };
+  try { info = await invoke('mcp_info'); } catch { /* старое ядро */ }
+  $('#set-mcp').checked = info.enabled;
+  $('#set-mcp-setup').classList.toggle('hidden', !info.enabled);
+  const exe = info.exe || 'FileHunter';
+  $('#mcp-cmd').textContent = `claude mcp add filehunter -- "${exe}" --mcp`;
+  $('#mcp-json').textContent = JSON.stringify({ mcpServers: { filehunter: { command: exe, args: ['--mcp'] } } }, null, 2);
+}
+$('#set-mcp').addEventListener('change', async (e) => {
+  try { await invoke('mcp_set', { enabled: e.target.checked }); } catch (er) { toast(String(er), 6000); }
+  mcpRender();
+});
+$('#settings-modal').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-copy]');
+  if (b) copyText($('#' + b.dataset.copy).textContent, tr('mcp.what'));
+});
+// агент просит скопировать — спрашиваем человека
+listen('mcp-confirm', async ({ payload }) => {
+  const ok = await ask(payload.text, { ok: tr('mcp.allow') });
+  invoke('mcp_answer', { id: payload.id, ok }).catch(() => {});
+});
 const settingsClose = () => $('#settings-modal').classList.add('hidden');
 $('#set-lang').addEventListener('change', (e) => setLang(e.target.value));
 $('#set-theme').addEventListener('change', (e) => setTheme(e.target.value));
