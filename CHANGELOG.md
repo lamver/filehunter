@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.10
+
+Security fixes for connected computers. Please update every computer.
+
+- A computer you connected could reach files outside the folders you opened to it, by
+  using `..` in a path. Such paths are now refused.
+- Copying from another computer or from S3 no longer accepts a file list with paths that
+  lead outside the destination folder.
+- A device that is not connected can no longer make the app reserve a lot of memory with
+  one request.
+
 ## 0.1.9
 
 - Access for AI agents (MCP), off by default: Settings → AI agents. Claude Desktop,
