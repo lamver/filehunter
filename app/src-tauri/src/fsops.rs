@@ -40,6 +40,12 @@ pub fn join(dir: &str, name: &str) -> String {
     if dir.ends_with(['/', '\\']) { format!("{dir}{name}") } else { format!("{dir}{sep}{name}") }
 }
 
+/// В пути есть часть из одних точек и пробелов («..», «.. », «...»): через неё путь уходит
+/// выше по дереву. Windows отбрасывает точки и пробелы в конце имени, поэтому «.. » — тоже «..».
+pub fn has_dot_parts(path: &str) -> bool {
+    path.split(['/', '\\']).any(|p| !p.is_empty() && p.trim_end_matches([' ', '.']).is_empty())
+}
+
 pub fn base_name(path: &str) -> String {
     path.trim_end_matches(['/', '\\']).rsplit(['/', '\\']).next().unwrap_or(path).to_string()
 }

@@ -28,6 +28,8 @@ const ALPN: &[u8] = b"filecat/1";
 pub const PROTO: u32 = 4;
 /// Больше этого JSON-сообщение быть не может — защита от мусора.
 const MAX_MSG: u32 = 64 << 20;
+/// От несопряжённого устройства ждём только короткий запрос на сопряжение.
+const MAX_UNPAIRED_MSG: u32 = 64 << 10;
 /// Кусок файла за один запрос при скачивании.
 pub const CHUNK: u64 = 4 << 20;
 const INVITE_TTL: Duration = Duration::from_secs(10 * 60);
@@ -65,7 +67,8 @@ impl Share {
 
     /// Путь внутри одного из открытых корней.
     pub fn allows(&self, path: &str) -> bool {
-        if !self.can_view() {
+        // сравниваем строки, поэтому «D:\Фото\..\Другое» иначе прошёл бы как путь внутри «D:\Фото»
+        if !self.can_view() || crate::fsops::has_dot_parts(path) {
             return false;
         }
         let p = path.to_lowercase();
@@ -359,9 +362,12 @@ impl P2p {
                 send.write_all(&data).await.map_err(|e| e.to_string())?;
             }
             send.finish().map_err(|e| e.to_string())?;
-            let resp: Response = read_msg(&mut recv).await?;
+            let resp: Response = read_msg(&mut recv, MAX_MSG).await?;
             if !resp.ok {
                 return Err(resp.err);
+            }
+            if resp.bin > 2 * crate::fsops::CHUNK {
+                return Err(tr("Message too large", "слишком большое сообщение").into());
             }
             let mut bin = vec![0u8; resp.bin as usize];
             if resp.bin > 0 {
@@ -443,11 +449,11 @@ async fn write_msg<T: Serialize>(send: &mut SendStream, msg: &T) -> Result<(), S
     send.write_all(&b).await.map_err(|e| e.to_string())
 }
 
-async fn read_msg<T: for<'de> Deserialize<'de>>(recv: &mut RecvStream) -> Result<T, String> {
+async fn read_msg<T: for<'de> Deserialize<'de>>(recv: &mut RecvStream, max: u32) -> Result<T, String> {
     let mut len = [0u8; 4];
     recv.read_exact(&mut len).await.map_err(|e| e.to_string())?;
     let len = u32::from_be_bytes(len);
-    if len > MAX_MSG {
+    if len > max {
         return Err(tr("Message too large", "слишком большое сообщение").into());
     }
     let mut b = vec![0u8; len as usize];
@@ -476,16 +482,18 @@ impl ProtocolHandler for Handler {
             let (app, p2p, remote) = (self.app.clone(), self.p2p.clone(), remote.clone());
             tauri::async_runtime::spawn(async move {
                 let Some(p2p) = p2p.upgrade() else { return };
-                let Ok(req) = read_msg::<Request>(&mut recv).await else { return };
+                // сначала проверка, потом память: чужой не должен заставить выделять мегабайты
+                let paired = p2p.is_peer(&remote);
+                let Ok(req) = read_msg::<Request>(&mut recv, if paired { MAX_MSG } else { MAX_UNPAIRED_MSG }).await else { return };
                 // данные запроса (кусок файла) — не больше одного куска с запасом
-                if req.bin > 2 * crate::fsops::CHUNK {
+                let max_bin = if paired { 2 * crate::fsops::CHUNK } else { 0 };
+                if req.bin > max_bin {
                     return;
                 }
                 let mut data = vec![0u8; req.bin as usize];
                 if req.bin > 0 && recv.read_exact(&mut data).await.is_err() {
                     return;
                 }
-                let paired = p2p.is_peer(&remote);
                 let res = if req.method == "pair" {
                     pair(&p2p, &remote, &req.args)
                 } else if !paired {
@@ -742,6 +750,18 @@ mod tests {
         assert!(!none.allows(r"D:\Фото"), "по умолчанию — ничего");
         let full = Share { level: "full".into(), roots: vec![r"C:\".into()] };
         assert!(full.allows(r"C:\Users\a.txt") && full.can_write());
+    }
+
+    #[test]
+    fn share_does_not_let_paths_climb_out() {
+        let s = Share { level: "view".into(), roots: vec![r"D:\Фото".into(), "s3://Backup".into()] };
+        for p in [r"D:\Фото\..\Секрет", r"D:\Фото/../Секрет", r"D:\Фото\.. \Секрет", r"D:\Фото\...\Секрет", r"D:\Фото\2025\..\..\Секрет", "s3://Backup/../Archive"] {
+            assert!(!s.allows(p), "{p}");
+        }
+        // точки внутри имён — обычные имена
+        for p in [r"D:\Фото\a..b\c.jpg", r"D:\Фото\.скрытая\файл.", "s3://Backup/x/..y"] {
+            assert!(s.allows(p), "{p}");
+        }
     }
 }
 

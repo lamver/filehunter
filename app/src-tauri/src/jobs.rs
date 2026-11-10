@@ -709,6 +709,11 @@ impl Run<'_> {
             }
             let tree = src.tree(&it.path)?;
             for t in tree {
+                // список приходит с другого компьютера или из S3: запись не должна уйти выше папки назначения
+                if fsops::has_dot_parts(&t.rel) {
+                    let rel = &t.rel;
+                    return Err(l!("«{name}» contains an unsafe path: {rel}", "В «{name}» небезопасный путь: {rel}"));
+                }
                 let to = if t.rel.is_empty() {
                     target.clone()
                 } else {
