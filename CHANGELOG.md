@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.11
+
+- Files added, deleted or renamed while FileHunter was not running are now picked up:
+  a minute after start the app checks the folders of internal disks in the background
+  and re-reads only those that changed. Before, deleted files could stay in the list
+  and folder sizes could be far too large.
+- Unfinished copies of the index, left when the app was closed while saving, are
+  removed at start.
+
 ## 0.1.10
 
 Security fixes for connected computers. Please update every computer.
