@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.12
+
+- Opening a folder on this computer checks everything inside it with the disk in the
+  background, so its size is right while you look at it. The folder opened last is
+  checked first; the ones you left are finished afterwards.
+- The check after start fixes what it finds right away instead of at the end.
+- If the index counts more on a disk than the system says is used, the disk is checked
+  in full (at most every 6 hours).
+
 ## 0.1.11
 
 - Files added, deleted or renamed while FileHunter was not running are now picked up:
