@@ -170,23 +170,77 @@ pub fn catch_up(app: AppHandle, st: Arc<AppState>) {
     if std::env::var_os("FILECAT_NO_AUTOINDEX").is_some() {
         return;
     }
+    SWEEPING.store(true, Ordering::SeqCst);
     std::thread::spawn(move || {
         // сначала программа спокойно запускается
         std::thread::sleep(CATCH_UP_DELAY);
-        let _bg = filecat_core::throttle::BackgroundGuard::enter();
-        let limiter = filecat_core::throttle::RateLimiter::new(CATCH_UP_DIRS_PER_SEC);
         let roots: Vec<(String, i64)> = {
             let idx = st.index.read().unwrap();
             idx.segments.iter().filter(|s| checkable(&st, &s.info.root)).map(|s| (s.info.root.clone(), s.info.scanned_at)).collect()
         };
-        for (root, scanned_at) in roots {
-            let report = &mut |ch: Vec<(FileRef, Change)>| changed(&app, &st, &ch);
-            if filecat_core::scan::catch_up(&st.index, &root, None, &limiter, &|| false, report) {
-                // источник сверен целиком — открытые в нём папки проверять уже незачем
-                FOCUS.lock().unwrap().checked.push((root, scanned_at, None));
-            }
-        }
+        sweep(&app, &st, roots);
     });
+}
+
+/// Идёт сверка источников целиком (после запуска или по тревоге).
+static SWEEPING: AtomicBool = AtomicBool::new(false);
+/// Когда источник последний раз сверили целиком.
+static SWEPT: Mutex<Vec<(String, Instant)>> = Mutex::new(Vec::new());
+/// По тревоге один и тот же диск сверяется не чаще: на диске со ссылками (hard link)
+/// или файлами в облаке индекс честно насчитывает больше занятого места, и без этого
+/// тревога поднималась бы снова и снова.
+const ALARM_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+
+/// Сверить источники целиком, бережно, по одному. Снимает `SWEEPING`.
+fn sweep(app: &AppHandle, st: &Arc<AppState>, roots: Vec<(String, i64)>) {
+    let _bg = filecat_core::throttle::BackgroundGuard::enter();
+    let limiter = filecat_core::throttle::RateLimiter::new(CATCH_UP_DIRS_PER_SEC);
+    for (root, scanned_at) in roots {
+        let report = &mut |ch: Vec<(FileRef, Change)>| changed(app, st, &ch);
+        if filecat_core::scan::catch_up(&st.index, &root, None, &limiter, &|| false, report) {
+            // источник сверен целиком — открытые в нём папки проверять уже незачем
+            FOCUS.lock().unwrap().checked.push((root.clone(), scanned_at, None));
+            let mut swept = SWEPT.lock().unwrap();
+            swept.retain(|(r, _)| *r != root);
+            swept.push((root, Instant::now()));
+        }
+    }
+    SWEEPING.store(false, Ordering::SeqCst);
+}
+
+/// Тревога: по индексу на диске лежит больше, чем, по словам системы, на нём занято.
+/// Так бывает, только если в индексе остались удалённые файлы (например, слежение
+/// пропустило изменения), — такой диск сверяется целиком. Проверяется периодически.
+pub fn alarm(app: AppHandle, st: Arc<AppState>) {
+    if SWEEPING.load(Ordering::SeqCst) || std::env::var_os("FILECAT_NO_AUTOINDEX").is_some() {
+        return;
+    }
+    let roots: Vec<(String, i64)> = {
+        let idx = st.index.read().unwrap();
+        let swept = SWEPT.lock().unwrap();
+        idx.segments
+            .iter()
+            .filter(|s| checkable(&st, &s.info.root))
+            .filter(|s| !swept.iter().any(|(r, t)| *r == s.info.root && t.elapsed() < ALARM_EVERY))
+            .filter(|s| {
+                let drv = st.drives.lock().unwrap();
+                // только источник — весь диск: про папку система размера не скажет
+                let Some(v) = drv.now.iter().find(|v| v.root.eq_ignore_ascii_case(&s.info.root)) else { return false };
+                let used = v.total.saturating_sub(v.free);
+                let indexed: u64 = s.entries.iter().filter(|e| !e.is_dir() && !e.is_deleted()).map(|e| e.size).sum();
+                let over = indexed > used + (used / 20).max(2 << 30);
+                if over {
+                    eprintln!("тревога {}: в индексе {indexed} байт, занято {used}", s.info.root);
+                }
+                over
+            })
+            .map(|s| (s.info.root.clone(), s.info.scanned_at))
+            .collect()
+    };
+    if roots.is_empty() || SWEEPING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || sweep(&app, &st, roots));
 }
 
 /// Источник на внутреннем диске, том которого тот же, что сканировали.

@@ -2583,11 +2583,12 @@ fn main() {
             // что изменилось на дисках, пока программа не работала
             watch::catch_up(app.handle().clone(), st.clone());
             auto_index(app.handle().clone(), st.clone());
-            // раз в полчаса проверяем, не пора ли сверить S3
+            // раз в полчаса проверяем, не пора ли сверить S3 и не разошёлся ли индекс с дисками
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(std::time::Duration::from_secs(30 * 60));
                 auto_index(handle.clone(), st.clone());
+                watch::alarm(handle.clone(), st.clone());
             });
             Ok(())
         })
