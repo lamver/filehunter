@@ -303,6 +303,20 @@ impl Segment {
         self.entries.iter().enumerate().filter(|(_, e)| e.is_dir() && !e.is_deleted()).map(|(i, _)| i as u32).collect()
     }
 
+    /// Неудалённые папки внутри `dir` на любой глубине (сама она не входит).
+    /// Родитель записан раньше детей, поэтому хватает одного прохода.
+    pub fn dir_ids_under(&self, dir: u32) -> Vec<u32> {
+        let mut inside = vec![false; self.entries.len()];
+        let mut out = Vec::new();
+        for (i, e) in self.entries.iter().enumerate() {
+            if e.is_dir() && !e.is_deleted() && e.parent != NO_PARENT && (e.parent == dir || inside[e.parent as usize]) {
+                inside[i] = true;
+                out.push(i as u32);
+            }
+        }
+        out
+    }
+
     /// Сверяет детей локальной папки `dir` (`NO_PARENT` — корень) с тем, что в ней сейчас
     /// на диске. `live` — имя, флаги, размер и время, как их даёт `entry_meta`; список
     /// должен быть полным, иначе непрочитанное посчитается удалённым. Добавляет новые

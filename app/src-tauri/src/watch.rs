@@ -8,9 +8,9 @@ use filecat_core::FileRef;
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
@@ -175,31 +175,115 @@ pub fn catch_up(app: AppHandle, st: Arc<AppState>) {
         std::thread::sleep(CATCH_UP_DELAY);
         let _bg = filecat_core::throttle::BackgroundGuard::enter();
         let limiter = filecat_core::throttle::RateLimiter::new(CATCH_UP_DIRS_PER_SEC);
-        for root in local_roots(&st) {
-            let changes = filecat_core::scan::catch_up(&st.index, &root, &limiter);
-            if !changes.is_empty() {
-                eprintln!("сверка {root}: {} изменений", changes.len());
+        let roots: Vec<(String, i64)> = {
+            let idx = st.index.read().unwrap();
+            idx.segments.iter().filter(|s| checkable(&st, &s.info.root)).map(|s| (s.info.root.clone(), s.info.scanned_at)).collect()
+        };
+        for (root, scanned_at) in roots {
+            let report = &mut |ch: Vec<(FileRef, Change)>| changed(&app, &st, &ch);
+            if filecat_core::scan::catch_up(&st.index, &root, None, &limiter, &|| false, report) {
+                // источник сверен целиком — открытые в нём папки проверять уже незачем
+                FOCUS.lock().unwrap().checked.push((root, scanned_at, None));
             }
-            changed(&app, &st, &changes);
         }
     });
 }
 
-/// Источники на внутренних дисках, том которых тот же, что сканировали.
-fn local_roots(st: &AppState) -> Vec<String> {
-    let idx = st.index.read().unwrap();
+/// Источник на внутреннем диске, том которого тот же, что сканировали.
+/// Съёмный под той же буквой может оказаться другим, сетевые медленные.
+fn checkable(st: &AppState, root: &str) -> bool {
+    if root.contains("://") {
+        return false;
+    }
+    let low = root.to_lowercase();
     let drv = st.drives.lock().unwrap();
-    idx.segments
-        .iter()
-        .filter(|s| !s.is_remote())
-        .map(|s| s.info.root.clone())
-        .filter(|r| {
-            let low = r.to_lowercase();
-            drv.now.iter().filter(|v| low.starts_with(&v.root.to_lowercase())).max_by_key(|v| v.root.len()).is_some_and(|v| {
-                v.kind == "fixed" && drv.known.get(&v.root).and_then(|k| k.indexed_serial).is_none_or(|s| s == v.serial)
-            })
-        })
-        .collect()
+    drv.now.iter().filter(|v| low.starts_with(&v.root.to_lowercase())).max_by_key(|v| v.root.len()).is_some_and(|v| {
+        v.kind == "fixed" && drv.known.get(&v.root).and_then(|k| k.indexed_serial).is_none_or(|s| s == v.serial)
+    })
+}
+
+/// Папка для проверки: корень источника, когда его сканировали, и сама папка (None — корень).
+type FocusKey = (String, i64, Option<u32>);
+
+/// Проверка открытых папок. Открытая последней — первая; прерванные не бросаются,
+/// а доделываются следом. Проверяет один поток: двадцать папок, открытых подряд,
+/// иначе разом нагрузили бы диск.
+#[derive(Default)]
+struct Focus {
+    /// Очередь: последняя — та, что открыта сейчас.
+    pending: Vec<FocusKey>,
+    /// Проверенные целиком; дальше их держит в порядке слежение.
+    checked: Vec<FocusKey>,
+    running: bool,
+}
+
+static FOCUS: Mutex<Focus> = Mutex::new(Focus { pending: Vec::new(), checked: Vec::new(), running: false });
+/// Растёт с каждой открытой папкой: идущая проверка уступает место новой.
+static FOCUS_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Больше папок в очереди не держим: самые давние отбрасываются.
+const FOCUS_MAX: usize = 50;
+
+/// Открыли папку на этом компьютере: проверить её и всё, что внутри, с диском.
+pub fn focus(app: AppHandle, st: Arc<AppState>, seg: u16, dir: Option<u32>) {
+    let (root, scanned_at, chain) = {
+        let idx = st.index.read().unwrap();
+        let Some(s) = idx.segments.get(seg as usize) else { return };
+        // сама папка и все над ней: если проверена любая из них, проверена и эта
+        let mut chain = vec![None];
+        let mut cur = dir;
+        while let Some(d) = cur.filter(|&d| d != filecat_core::index::NO_PARENT && (d as usize) < s.entries.len()) {
+            chain.push(Some(d));
+            cur = Some(s.entries[d as usize].parent);
+        }
+        (s.info.root.clone(), s.info.scanned_at, chain)
+    };
+    if !checkable(&st, &root) {
+        return;
+    }
+    let key = (root.clone(), scanned_at, dir);
+    let mut f = FOCUS.lock().unwrap();
+    if f.checked.iter().any(|(r, t, d)| *r == root && *t == scanned_at && chain.contains(d)) || f.pending.last() == Some(&key) {
+        return;
+    }
+    f.pending.retain(|k| *k != key);
+    f.pending.push(key);
+    if f.pending.len() > FOCUS_MAX {
+        f.pending.remove(0);
+    }
+    FOCUS_SEQ.fetch_add(1, Ordering::SeqCst);
+    if !f.running {
+        f.running = true;
+        std::thread::spawn(move || focus_worker(app, st));
+    }
+}
+
+fn focus_worker(app: AppHandle, st: Arc<AppState>) {
+    let limiter = filecat_core::throttle::RateLimiter::new(0);
+    loop {
+        let job = {
+            let mut f = FOCUS.lock().unwrap();
+            match f.pending.last().cloned() {
+                Some(job) => job,
+                None => {
+                    f.running = false;
+                    return;
+                }
+            }
+        };
+        let seq = FOCUS_SEQ.load(Ordering::SeqCst);
+        let paused = || FOCUS_SEQ.load(Ordering::SeqCst) != seq;
+        let report = &mut |ch: Vec<(FileRef, Change)>| changed(&app, &st, &ch);
+        let done = filecat_core::scan::catch_up(&st.index, &job.0, job.2, &limiter, &paused, report);
+        let mut f = FOCUS.lock().unwrap();
+        // уступила новой папке — останется в очереди и продолжится после неё;
+        // иначе готово (или источник пересканировали, диск отключили — тогда незачем)
+        if done || !paused() {
+            f.pending.retain(|k| *k != job);
+            if done {
+                f.checked.push(job);
+            }
+        }
+    }
 }
 
 /// Убирает из групп удалённые и изменённые файлы и перепроверяет файлы

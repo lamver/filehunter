@@ -831,6 +831,13 @@ fn semantic_status(st: State<Shared>) -> semantic::Status {
     st.semantic.status.lock().unwrap().clone()
 }
 
+/// Открытую папку этого компьютера проверить с диском вместе со всем, что внутри:
+/// её размер — сумма всех вложенных. Идёт в фоне, найденное приходит как изменения индекса.
+#[tauri::command]
+fn focus_dir(app: AppHandle, st: State<Shared>, seg: u16, dir: Option<u32>) {
+    watch::focus(app, st.inner().clone(), seg, dir);
+}
+
 /// Сверяет открытую папку с тем, что реально лежит на диске или в S3 (одно чтение папки),
 /// и поправляет индекс: пропавшее убирает, новое добавляет. Так исправляются и изменения,
 /// сделанные, пока программа была закрыта. Возвращает число изменений.
@@ -2475,6 +2482,7 @@ fn main() {
             peer_download,
             peer_open,
             s3_refresh,
+            focus_dir,
             preview,
             search_folder,
             search_all,

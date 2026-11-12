@@ -310,6 +310,8 @@ async function openDir(dir, keepSel) {
   if (!(keepSel && same)) { Bz.sel = -1; Bz.shown = 2000; $('#b-list').scrollTop = 0; }
   afterNav(!same);
   if (Fz.query) runFind(); else renderBrowse();
+  // и всё, что внутри неё, — в фоне: размер папки складывается из вложенных
+  if (!keepSel && !s.peer && s.kind !== 's3') invoke('focus_dir', { seg: s.seg, dir }).catch(() => {});
   // открытую папку сверяем с диском или S3: изменения, пока программа была закрыта, тоже подтянутся
   if (!keepSel) refreshS3(s, dir);
 }
