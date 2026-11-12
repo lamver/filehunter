@@ -298,6 +298,58 @@ impl Segment {
         out.len()
     }
 
+    /// Неудалённые папки (ссылки не в счёт) — для сверки с диском.
+    pub fn dir_ids(&self) -> Vec<u32> {
+        self.entries.iter().enumerate().filter(|(_, e)| e.is_dir() && !e.is_deleted()).map(|(i, _)| i as u32).collect()
+    }
+
+    /// Сверяет детей локальной папки `dir` (`NO_PARENT` — корень) с тем, что в ней сейчас
+    /// на диске. `live` — имя, флаги, размер и время, как их даёт `entry_meta`; список
+    /// должен быть полным, иначе непрочитанное посчитается удалённым. Добавляет новые
+    /// записи, обновляет изменённые файлы, помечает пропавшие и запоминает время самой
+    /// папки. Возвращает новые папки: их содержимое читают отдельно, не держа индекс.
+    pub fn sync_local(&mut self, dir: u32, dir_mtime: i64, live: &[(String, u16, u64, i64)], out: &mut Vec<(u32, Change)>) -> Vec<u32> {
+        const KIND: u16 = flags::DIR | flags::SYMLINK;
+        self.ensure_children();
+        let mut seen = std::collections::HashSet::new();
+        let mut new_dirs = Vec::new();
+        for (name, fl, size, mtime) in live {
+            let lower = name.to_lowercase();
+            if let Some(i) = self.find_child(dir, truncate(&lower)) {
+                let e = &mut self.entries[i as usize];
+                // файл стал папкой или наоборот — старая запись уйдёт ниже как пропавшая
+                if e.flags & KIND == fl & KIND {
+                    seen.insert(i);
+                    // время папки меняется, только когда сверяют её саму: иначе её
+                    // изменения не заметила бы следующая сверка
+                    let mtime = if e.is_dir() { e.mtime } else { *mtime };
+                    if e.size != *size || e.mtime != mtime || e.flags != *fl {
+                        e.size = *size;
+                        e.mtime = mtime;
+                        e.flags = *fl;
+                        out.push((i, Change::Modified));
+                    }
+                    continue;
+                }
+            }
+            let i = self.push_entry(dir, name, *fl, *size, *mtime);
+            seen.insert(i);
+            out.push((i, Change::Created));
+            if fl & flags::DIR != 0 {
+                new_dirs.push(i);
+            }
+        }
+        for c in self.children(dir) {
+            if !seen.contains(&c) {
+                self.mark_deleted(c, out);
+            }
+        }
+        if dir != NO_PARENT {
+            self.entries[dir as usize].mtime = dir_mtime;
+        }
+        new_dirs
+    }
+
     /// Приводит запись для `path` в соответствие с диском: добавляет, обновляет
     /// или помечает удалённой. Новые папки индексируются вместе с содержимым.
     pub fn apply(&mut self, path: &Path, out: &mut Vec<(u32, Change)>) {

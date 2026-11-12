@@ -1,8 +1,10 @@
 //! Сканеры источников. Сейчас — параллельный обход каталогов (любая ОС и ФС).
 //! Фаза 4: чтение NTFS MFT + USN Journal.
 
+mod catchup;
 mod walk;
 
+pub use catchup::catch_up;
 pub use walk::scan_walk;
 
 #[derive(Clone, Debug)]

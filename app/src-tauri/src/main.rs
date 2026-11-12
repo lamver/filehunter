@@ -2564,7 +2564,16 @@ fn main() {
                     drives::mark_indexed(&st, r);
                 }
             }
+            // недописанные копии индекса: программу закрыли посреди сохранения
+            // (здесь, а не раньше: второй экземпляр сюда не доходит и чужое не удалит)
+            if let Ok(rd) = std::fs::read_dir(&st.data_dir) {
+                for e in rd.flatten().filter(|e| e.file_name().to_string_lossy().starts_with("index.tmp")) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
             watch::start(app.handle().clone(), st.clone());
+            // что изменилось на дисках, пока программа не работала
+            watch::catch_up(app.handle().clone(), st.clone());
             auto_index(app.handle().clone(), st.clone());
             // раз в полчаса проверяем, не пора ли сверить S3
             let handle = app.handle().clone();

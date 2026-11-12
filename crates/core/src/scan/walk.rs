@@ -171,7 +171,7 @@ fn walk_dir<'s, 'p: 's>(scope: &rayon::Scope<'s>, ctx: &'s Ctx<'p>, path: PathBu
 /// Куда не заходить при обходе: на macOS это те же файлы под другим путём
 /// (/System/Volumes/Data) и подключённые тома (/Volumes — у них свои источники);
 /// на Linux — виртуальные файловые системы.
-fn skip_inside(p: &Path) -> bool {
+pub(super) fn skip_inside(p: &Path) -> bool {
     if cfg!(windows) {
         return false;
     }

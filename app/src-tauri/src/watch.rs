@@ -24,6 +24,10 @@ const SAVE_EVERY: Duration = Duration::from_secs(10 * 60);
 /// их проверяет только ручной поиск.
 const LIVE_MAX_SIZE: u64 = 2 << 30;
 const LIVE_RATE: u64 = 30 * 1024 * 1024;
+/// Сверка с диском начинается не сразу после запуска.
+const CATCH_UP_DELAY: Duration = Duration::from_secs(60);
+/// Темп сверки, папок в секунду: заметно бережнее сканирования.
+const CATCH_UP_DIRS_PER_SEC: u64 = 2000;
 
 pub struct Watch {
     watcher: RecommendedWatcher,
@@ -139,17 +143,63 @@ fn process(app: &AppHandle, st: &AppState, paths: &HashSet<PathBuf>) -> bool {
         let Ok(mut idx) = st.index.try_write() else { return false };
         paths.iter().flat_map(|p| idx.apply_change(p)).collect()
     };
+    changed(app, st, &changes);
+    true
+}
+
+/// Индекс изменился: сохранить при случае, сообщить окну, поправить дубликаты.
+fn changed(app: &AppHandle, st: &AppState, changes: &[(FileRef, Change)]) {
     if changes.is_empty() {
-        return true;
+        return;
     }
     st.dirty.store(true, Ordering::Relaxed);
     st.generation.fetch_add(1, Ordering::Relaxed);
     st.changes.fetch_add(changes.len() as u64, Ordering::Relaxed);
     let _ = app.emit("index-changed", changes.len());
-    if update_dupes(st, &changes) {
+    if update_dupes(st, changes) {
         let _ = app.emit("dupes-updated", ());
     }
-    true
+}
+
+/// Сверка с диском после запуска: слежение видит изменения, только пока программа
+/// работает, а удалённое без неё так и числилось бы в индексе со своим размером.
+/// Только внутренние диски: на месте съёмного может оказаться другой (такой
+/// пересканирует автоиндексация), сетевые медленные.
+pub fn catch_up(app: AppHandle, st: Arc<AppState>) {
+    // FILECAT_NO_AUTOINDEX — проверочные экземпляры диски не трогают
+    if std::env::var_os("FILECAT_NO_AUTOINDEX").is_some() {
+        return;
+    }
+    std::thread::spawn(move || {
+        // сначала программа спокойно запускается
+        std::thread::sleep(CATCH_UP_DELAY);
+        let _bg = filecat_core::throttle::BackgroundGuard::enter();
+        let limiter = filecat_core::throttle::RateLimiter::new(CATCH_UP_DIRS_PER_SEC);
+        for root in local_roots(&st) {
+            let changes = filecat_core::scan::catch_up(&st.index, &root, &limiter);
+            if !changes.is_empty() {
+                eprintln!("сверка {root}: {} изменений", changes.len());
+            }
+            changed(&app, &st, &changes);
+        }
+    });
+}
+
+/// Источники на внутренних дисках, том которых тот же, что сканировали.
+fn local_roots(st: &AppState) -> Vec<String> {
+    let idx = st.index.read().unwrap();
+    let drv = st.drives.lock().unwrap();
+    idx.segments
+        .iter()
+        .filter(|s| !s.is_remote())
+        .map(|s| s.info.root.clone())
+        .filter(|r| {
+            let low = r.to_lowercase();
+            drv.now.iter().filter(|v| low.starts_with(&v.root.to_lowercase())).max_by_key(|v| v.root.len()).is_some_and(|v| {
+                v.kind == "fixed" && drv.known.get(&v.root).and_then(|k| k.indexed_serial).is_none_or(|s| s == v.serial)
+            })
+        })
+        .collect()
 }
 
 /// Убирает из групп удалённые и изменённые файлы и перепроверяет файлы
